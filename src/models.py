@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Optional
 
 # Noise that shows up in titles and destroys naive deduplication.
@@ -99,6 +100,86 @@ def canon_location(text: str) -> str:
     return head or t
 
 
+# Every source states "when was this posted" differently. Left as-is these are
+# unsortable and unfilterable, and a third of the database looked undated when
+# it was not: Lever sends epoch milliseconds, Himalayas epoch seconds, RSS
+# feeds RFC-2822, Workday and Instahyre a human sentence. Normalise once, here,
+# so everything downstream can just compare strings.
+_ISO_FORMATS = (
+    "%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z",
+    "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d",
+)
+_RELATIVE = re.compile(
+    r"(?:posted\s+)?(?:(today|yesterday)|(\d+)\s*\+?\s*(day|week|month|hour|minute)s?)",
+    re.I,
+)
+
+
+def parse_date(value) -> Optional[str]:
+    """Best-effort convert any source's date into ISO 8601 UTC, or None."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+
+    # Epoch. 13 digits is milliseconds (Lever), 10 is seconds (Himalayas).
+    if text.isdigit() and len(text) in (10, 13):
+        stamp = int(text) / (1000 if len(text) == 13 else 1)
+        try:
+            return datetime.fromtimestamp(stamp, tz=timezone.utc).isoformat(
+                timespec="seconds")
+        except (OverflowError, OSError, ValueError):
+            return None
+
+    cleaned = text.replace("Z", "+00:00").replace(" UTC", "+00:00")
+    # "+0000" without a colon predates Python 3.7's parser in some formats.
+    tz_fix = re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", cleaned)
+    for candidate in (cleaned, tz_fix):
+        try:
+            dt = datetime.fromisoformat(candidate)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+        except ValueError:
+            pass
+        for fmt in _ISO_FORMATS:
+            try:
+                dt = datetime.strptime(candidate, fmt)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+            except ValueError:
+                continue
+
+    # RFC 2822, as used by every RSS feed: "Tue, 08 Sep 2026 07:31:09 +0000".
+    try:
+        dt = parsedate_to_datetime(text)
+        if dt is not None:
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+    except (TypeError, ValueError):
+        pass
+
+    # "Posted 6 Days Ago", "Posted Today", "Posted 30+ Days Ago".
+    m = _RELATIVE.search(text)
+    if m:
+        now = datetime.now(timezone.utc)
+        word, amount, unit = m.group(1), m.group(2), m.group(3)
+        if word:
+            delta = timedelta(days=0 if word.lower() == "today" else 1)
+        else:
+            per = {"minute": timedelta(minutes=1), "hour": timedelta(hours=1),
+                   "day": timedelta(days=1), "week": timedelta(weeks=1),
+                   "month": timedelta(days=30)}[unit.lower()]
+            delta = per * int(amount)
+        return (now - delta).isoformat(timespec="seconds")
+
+    return None
+
+
 @dataclass
 class Job:
     company: str
@@ -142,6 +223,9 @@ class Job:
             f"{normalise_company(self.company)} {normalise(self.title)} "
             f"{canon_location(self.location)}"
         )
+
+    def __post_init__(self) -> None:
+        self.posted_at = parse_date(self.posted_at)
 
     def to_row(self) -> dict:
         d = asdict(self)

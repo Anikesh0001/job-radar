@@ -307,10 +307,32 @@ class Store:
         inside Telegram's rate limit, and the other 760 have to survive until
         the next run instead of being silently dropped.
         """
+        # Newest first, but pull a generous slice so the round-robin below has
+        # something from every source to work with.
         rows = self.conn.execute(
-            "SELECT * FROM jobs WHERE notified = 0 ORDER BY first_seen DESC LIMIT ?",
-            (limit,),
+            """SELECT * FROM jobs WHERE notified = 0
+               ORDER BY COALESCE(posted_at, first_seen) DESC, first_seen DESC
+               LIMIT ?""",
+            (max(limit * 20, 200),),
         ).fetchall()
+
+        # Interleave the sources. A run inserts source by source, so ordering
+        # purely by date posts twenty LinkedIn jobs, then twenty Instahyre, then
+        # twenty Greenhouse — the channel reads like three separate feeds glued
+        # together. Round-robin gives every source a turn, and keeps each
+        # source's own newest first.
+        by_source: dict[str, list] = {}
+        for r in rows:
+            by_source.setdefault(r["source"] or "", []).append(r)
+
+        order = sorted(by_source, key=lambda s: -len(by_source[s]))
+        picked, i = [], 0
+        while len(picked) < limit and any(by_source[s] for s in order):
+            source = order[i % len(order)]
+            if by_source[source]:
+                picked.append(by_source[source].pop(0))
+            i += 1
+
         return [
             Job(
                 company=r["company"], title=r["title"], url=r["url"],
@@ -318,7 +340,7 @@ class Store:
                 description=r["description"] or "", posted_at=r["posted_at"],
                 first_seen=r["first_seen"],
             )
-            for r in rows
+            for r in picked
         ]
 
     def pending_count(self) -> int:

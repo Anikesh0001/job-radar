@@ -7,6 +7,7 @@ an exclude pattern ("Senior Manager, University Recruiting" is not a grad job).
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 
 from .models import Job, canon_location, normalise, normalise_location
 
@@ -161,6 +162,10 @@ class Filter:
         self.entry_level_only = bool(f.get("entry_level_only", True))
         # Default on: every broad source in the config is general-purpose.
         self.it_only = bool(f.get("it_only", True))
+        # 0 disables the check. Postings whose source states no date at all
+        # always pass — Rippling and BambooHR publish none, and dropping them
+        # would silently delete two working sources rather than stale jobs.
+        self.max_age_days = int(f.get("max_age_days", 0) or 0)
 
     def _location_ok(self, job: Job) -> bool:
         if not self.locations:
@@ -186,6 +191,20 @@ class Filter:
         blob = normalise(f"{job.title} {job.description}")
         return any(k in blob for k in self.keywords)
 
+    def _fresh_enough(self, job: Job) -> bool:
+        if not self.max_age_days or not job.posted_at:
+            return True
+        try:
+            posted = datetime.fromisoformat(job.posted_at)
+        except ValueError:
+            return True
+        if posted.tzinfo is None:
+            posted = posted.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - posted).days
+        # A posting dated in the future is a source with a broken clock, not a
+        # job that has not happened yet. Keep it rather than lose it.
+        return age <= self.max_age_days
+
     def _it_ok(self, job: Job) -> bool:
         title = job.title or ""
         if NOT_IT.search(title):
@@ -210,6 +229,8 @@ class Filter:
             return "location mismatch"
         if not self._experience_ok(job):
             return "experience requirement"
+        if not self._fresh_enough(job):
+            return "too old"
         if not self._keywords_ok(job):
             return "no keyword match"
         return None

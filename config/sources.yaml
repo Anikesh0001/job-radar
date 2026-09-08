@@ -316,6 +316,12 @@ filters:
   # Drop postings demanding more than this many years. 99 = no cap.
   max_years_experience: 99
 
+  # Only surface postings published within this many days. 0 disables it.
+  # Postings whose source publishes no date at all always pass — Rippling and
+  # BambooHR state none, and rejecting them would delete two working sources
+  # rather than stale jobs.
+  max_age_days: 30
+
   # Substring match against the posting location. EMPTY MEANS EVERY LOCATION,
   # which is what "maximum results" wants. Uncomment the India block to narrow.
   locations: []

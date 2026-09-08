@@ -10,6 +10,7 @@ import json
 import sys
 import tempfile
 import types
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -20,7 +21,8 @@ from src import sources
 from src.db import Store
 from src.export import export, write_csv, write_txt
 from src.filters import Filter
-from src.models import Job, canon_location, normalise, normalise_company
+from src.models import (Job, canon_location, normalise, normalise_company,
+                        parse_date)
 from src import notify
 from src.notify import _fmt
 
@@ -617,6 +619,92 @@ def test_notify_queue_survives_across_runs():
         assert store.count() == 10
         store.close()
     print("  notify queue across runs           ok")
+
+
+def test_every_source_date_format_parses():
+    """Sources state dates in eight incompatible ways. Left unparsed, a third
+    of the database looked undated when it was not — so nothing could be
+    filtered by age or sorted by recency, and the channel posted roles that
+    had been open for two years."""
+    cases = {
+        "2026-08-13T17:45:55-04:00":      "2026-08-13T21:45:55+00:00",  # greenhouse
+        "2026-04-27T17:14:00.440+00:00":  "2026-04-27T17:14:00+00:00",  # ashby
+        "2026-09-03T12:39:11.157Z":       "2026-09-03T12:39:11+00:00",  # breezy
+        "2026-09-03T22:03:26+0000":       "2026-09-03T22:03:26+00:00",  # phenom, no colon
+        "2026-08-31 06:42:48 UTC":        "2026-08-31T06:42:48+00:00",  # recruitee
+        "Tue, 08 Sep 2026 07:31:09 +0000": "2026-09-08T07:31:09+00:00", # rss, RFC 2822
+        "1785877847006":                  "2026-08-04T21:10:47+00:00",  # lever, epoch ms
+        "1788859241":                     "2026-09-08T09:20:41+00:00",  # himalayas, epoch s
+        "2026-09-08":                     "2026-09-08T00:00:00+00:00",  # jobspy
+    }
+    for raw, expected in cases.items():
+        assert parse_date(raw) == expected, (raw, parse_date(raw))
+
+    # Workday and Instahyre write a sentence, not a date.
+    today = parse_date("Posted Today")
+    assert today and today.startswith(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    six = parse_date("Posted 6 Days Ago")
+    assert 5 <= (datetime.now(timezone.utc)
+                 - datetime.fromisoformat(six)).days <= 6, six
+    assert parse_date("Posted 30+ Days Ago") is not None
+
+    for junk in ("", None, "garbage", "not a date"):
+        assert parse_date(junk) is None, junk
+
+    # Normalisation happens on construction, so nothing downstream sees raw text.
+    assert Job(company="C", title="T", url="u",
+               posted_at="1785877847006").posted_at == "2026-08-04T21:10:47+00:00"
+    print("  date formats normalise             ok")
+
+
+def test_max_age_filter():
+    """'Latest only' has to survive sources that publish no date at all —
+    rejecting those would quietly delete Rippling and BambooHR rather than
+    stale postings."""
+    f = Filter({"filters": {"it_only": False, "entry_level_only": False,
+                            "max_age_days": 30}})
+    now = datetime.now(timezone.utc)
+
+    def job(days):
+        stamp = (now - timedelta(days=days)).isoformat() if days is not None else None
+        return Job(company="C", title="Software Engineer", url="u", posted_at=stamp)
+
+    assert f.reason(job(0)) is None
+    assert f.reason(job(29)) is None
+    assert f.reason(job(31)) == "too old"
+    assert f.reason(job(400)) == "too old"
+    assert f.reason(job(None)) is None          # undated sources survive
+    assert f.reason(job(-2)) is None            # a source with a broken clock
+
+    off = Filter({"filters": {"it_only": False, "entry_level_only": False,
+                              "max_age_days": 0}})
+    assert off.reason(job(400)) is None
+    print("  max age filter                     ok")
+
+
+def test_notify_queue_interleaves_sources():
+    """A run inserts source by source, so a purely chronological queue posted
+    twenty LinkedIn jobs, then twenty Instahyre, then twenty Greenhouse — the
+    channel read like three separate feeds glued together."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = Store(Path(tmp) / "i.db")
+        jobs = []
+        for source in ("linkedin", "instahyre", "greenhouse"):
+            for n in range(10):
+                jobs.append(Job(company=f"{source}{n}", title=f"Engineer {n}",
+                                url=f"https://{source}/{n}", location="Pune",
+                                source=source))
+        store.insert_new(jobs)
+
+        picked = store.pending_jobs(9)
+        assert len(picked) == 9
+        # Every source represented, and no run of three from the same one.
+        assert len({j.source for j in picked}) == 3, [j.source for j in picked]
+        seq = [j.source for j in picked]
+        assert not any(seq[i] == seq[i + 1] == seq[i + 2]
+                       for i in range(len(seq) - 2)), seq
+        store.close()
+    print("  notify queue interleaves sources   ok")
 
 
 def test_iter_targets_shape():
