@@ -1,20 +1,21 @@
-name: post jobs
+name: hourly jobs
 
-# Keeps the channel ticking between fetches.
+# Keeps the channel live around the clock.
 #
-# fetch.yml runs every four hours because polling 209 sources more often than
-# that is rude and pointless. But postings arrive faster than Telegram's rate
-# limit can announce them (~1,500 a day found, ~20 a minute deliverable), so
-# there is always a backlog. This posts from that backlog every hour without
-# fetching anything, which is what turns six bursts a day into a steady feed.
+# This polls a small, high-churn subset of sources (config/fast.yaml — the
+# aggregators, search APIs and India feeds, ~20 targets, well under a minute)
+# and posts what is new. fetch.yml still does the full 209-target sweep every
+# four hours for everything that changes more slowly.
 #
-# A run takes about a minute and makes no requests to any job source.
+# The split exists because company ATS boards change a few times a DAY, so
+# polling all 209 hourly would be rude and pointless; the aggregators genuinely
+# do change hourly.
 
 on:
   schedule:
-    # Every hour, on the half hour, so it never collides with fetch.yml's
-    # on-the-hour slot.
-    - cron: "30 * * * *"
+    # Every hour at :10 UTC, offset from fetch.yml's on-the-hour slot so the
+    # two do not queue behind each other.
+    - cron: "10 * * * *"
   workflow_dispatch:
     inputs:
       count:
@@ -35,7 +36,7 @@ env:
   STATE_TAG: data
 
 jobs:
-  post:
+  hourly:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -50,33 +51,41 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # No state yet means fetch.yml has never run. Carry on anyway: this
+      # config can seed a database perfectly well on its own, and refusing to
+      # start would leave the channel silent until the next four-hourly slot.
       - name: Restore database
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release download "$STATE_TAG" --pattern jobs.db.gz --clobber 2>/dev/null; then
             gunzip -f jobs.db.gz
+            echo "restored $(du -h jobs.db | cut -f1) database"
           else
-            echo "no state release yet — fetch jobs has not run, nothing to post"
-            echo "SKIP=1" >> "$GITHUB_ENV"
+            echo "no state release yet — starting a fresh database"
           fi
 
-      - name: Post from the queue
-        if: env.SKIP != '1'
+      - name: Fetch the fast sources and post
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          python -m src.run --post-only \
+          python -m src.run \
+            --config config/fast.yaml \
+            --export '' \
+            --queue-max-age 3 \
             --notify-limit "${{ github.event.inputs.count || 20 }}"
 
-      # Only the notified flags changed, but the whole file has to go back or
-      # the next run re-posts everything this one just sent.
       - name: Save state
-        if: env.SKIP != '1'
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          [ -f jobs.db ] || exit 0
           gzip -9f jobs.db
+          gh release view "$STATE_TAG" >/dev/null 2>&1 || \
+            gh release create "$STATE_TAG" --title "Live data" \
+              --notes "Database and spreadsheet for the job feed. Replaced automatically; do not delete." \
+              --latest=false
           gh release upload "$STATE_TAG" jobs.db.gz --clobber

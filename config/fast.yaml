@@ -1,0 +1,65 @@
+# ---------------------------------------------------------------------------
+# The hourly config, used by .github/workflows/post.yml.
+#
+# config/sources.yaml polls 209 targets and takes ~5 minutes. Running that
+# every hour would hammer 209 public APIs for almost no gain, because company
+# ATS boards change a few times a day, not a few times an hour.
+#
+# This is the subset that genuinely churns hourly — aggregators, search APIs
+# and the India-specific feeds — and it runs in well under a minute. Timings
+# measured on a clean machine:
+#
+#   jobicy 0.3s · himalayas 0.3s · remotive 0.4s · arbeitnow 1.0s
+#   smartrecruiters_search 1.8s · remoteok 2.1s · workingnomads 2.7s
+#   weworkremotely 2.7s · jobspy-indeed 4.5s · instahyre 5.0s
+#
+# The full sweep in sources.yaml still runs every four hours and picks up
+# everything this misses.
+# ---------------------------------------------------------------------------
+
+sources:
+  # Freshest India IT inventory. Indeed dates everything to the day.
+  jobspy:
+    - indeed|software engineer|India|100
+    - indeed|backend developer|India|75
+    - indeed|full stack developer|India|75
+    - indeed|data engineer|India|50
+    - indeed|devops engineer|India|50
+    - indeed|python developer|India|50
+    - indeed|java developer|India|50
+    - indeed|qa automation|India|50
+
+  # India-only, almost entirely IT. Six pages is plenty at this cadence.
+  instahyre:
+    - 210
+
+  # Cross-company search; reaches employers we hold no slug for.
+  smartrecruiters_search:
+
+  # Aggregator feeds — cheap and updated continuously.
+  remoteok:
+  arbeitnow:
+  remotive:
+  jobicy:
+  himalayas:
+  workingnomads:
+
+  rss:
+    - https://weworkremotely.com/remote-jobs.rss
+    - https://weworkremotely.com/categories/remote-programming-jobs.rss
+    - https://weworkremotely.com/categories/remote-full-stack-programming-jobs.rss
+    - https://himalayas.app/jobs/rss
+
+
+filters:
+  it_only: true
+  entry_level_only: false
+  max_years_experience: 99
+
+  # Tighter than the full config on purpose: this feed exists to carry what is
+  # new, and the four-hourly sweep already has the wider net.
+  max_age_days: 7
+
+  locations: []
+  keywords: []
+  block_companies: []

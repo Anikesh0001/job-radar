@@ -86,9 +86,13 @@ NOT_IT = re.compile(
     # "Salesforce Developer", which is squarely an IT role.
     r"sales\b|pre[- ]?sales|account ?(?:executive|manager)|business ?development|"
     r"recruit|talent ?acquisition|\bhr\b|human ?resource|"
-    r"civil ?engineer|mechanical ?engineer|electrical ?engineer|"
-    r"chemical ?engineer|industrial ?engineer|structural ?engineer|"
-    r"process ?engineer|manufactur|production ?(?:engineer|operator|associate)|"
+    # Allow a qualifier between the discipline and "engineer": the adjacent-
+    # words version missed "Civil Project Engineer" and "Mechanical Design
+    # Engineer", which are exactly as non-IT as the plain forms.
+    r"(?:civil|mechanical|electrical|chemical|industrial|structural|process|"
+    r"manufacturing|production|petroleum|mining|marine|aerospace|automotive|"
+    r"geotechnical|environmental)\b[\w ]{0,14}\bengineer|"
+    r"manufactur|production ?(?:operator|associate|supervisor)|"
     r"field ?(?:engineer|technician|service)|service ?technician|maintenance|"
     r"nurse|nursing|physician|clinical|pharmac|medical|healthcare ?assistant|"
     r"driver|warehouse|forklift|logistics|supply ?chain|"
