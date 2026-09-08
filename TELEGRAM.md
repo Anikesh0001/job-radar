@@ -203,9 +203,9 @@ auto-disables scheduled workflows after 60 days of repo inactivity, and
 committing the database instead of storing it as a release asset grows the repo
 by ~5.6GB a year.
 
-Note the workflow's **first run posts nothing** — it baselines the ~12,000
-already-collected postings for you, exactly as Step 6 does here, so you do not
-need to run `--mark-all-notified` yourself when deploying this way.
+Deploying this way you do **not** need Step 6 below: the workflow posts its
+normal quota on the first run and then clears the ~12,000-job back catalogue
+for you automatically.
 
 ### Option B — cron on this machine
 

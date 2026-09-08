@@ -114,21 +114,25 @@ and you must visit and re-enable the workflow roughly every two months.
 If Actions shows *"Workflows aren't being run on this forked repository"* or a
 green **I understand my workflows, go ahead and enable them** button, click it.
 
-The first run takes about 5 minutes and does something deliberate:
+The first run takes about 5 minutes:
 
 ```
 no state release yet — first run, starting from empty
 fetched 29258 raw postings from 209 targets
 14842 postings passed filters
-12468 new after dedupe
-marked 12468 stored posting(s) as already delivered
+12468 new after dedupe (12468 total in db)
+telegram: posting 40 of 12468 queued (one message each, ~3.5s apart)
+  sent 1/40   Swiggy — SDE-1, Backend
+  ...
+marked 12428 stored posting(s) as already delivered
 ```
 
-**It posts nothing.** A first run finds ~12,000 jobs; announcing them all is
-days of Telegram rate limit and reads as spam. So run one seeds the database
-silently, and the channel starts filling from run two, four hours later.
+**You get 40 jobs immediately**, then the remaining ~12,000 back catalogue is
+dropped from the queue. That is deliberate: dripping it out would take seven
+weeks and bury every genuinely new opening behind it. From run two onwards the
+channel carries whatever is actually new, typically 20-120 per run.
 
-Want the back catalogue instead? See "Choosing how much to post" below.
+Want the back catalogue after all? See "Choosing how much to post" below.
 
 ---
 

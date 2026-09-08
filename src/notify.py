@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 import os
 import time
 
@@ -17,6 +18,19 @@ import httpx
 from .models import Job
 
 log = logging.getLogger(__name__)
+
+# The bot token is a path segment of every Telegram API URL, and httpx logs the
+# full URL at INFO. Anything that turns on INFO logging — a one-off script, a
+# debugging session, a CI job — would print the token in clear text. Silence it
+# here rather than only in src/run.py, so the protection travels with the code
+# that actually holds the secret.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+def _redact(text: str) -> str:
+    """Strip anything that looks like a bot token out of a message we log."""
+    return re.sub(r"\b\d{8,10}:[A-Za-z0-9_-]{30,}", "<token>", text or "")
 
 TG_API = "https://api.telegram.org/bot{token}/{method}"
 
@@ -71,7 +85,7 @@ def send_one(client: httpx.Client, token: str, chat_id: str, job: Job) -> bool:
         try:
             r = client.post(TG_API.format(token=token, method="sendMessage"), json=payload)
         except httpx.TransportError as e:
-            log.warning("telegram transport error: %s", e)
+            log.warning("telegram transport error: %s", _redact(str(e)))
             time.sleep(2 * (attempt + 1))
             continue
 
@@ -90,7 +104,7 @@ def send_one(client: httpx.Client, token: str, chat_id: str, job: Job) -> bool:
         # 400s are this message's fault (bad HTML, dead URL); retrying is
         # pointless and would stall the whole queue behind one poison entry.
         if 400 <= r.status_code < 500:
-            log.error("telegram rejected %s: %s", job.title[:50], r.text[:200])
+            log.error("telegram rejected %s: %s", job.title[:50], _redact(r.text)[:200])
             return False
 
         time.sleep(2 * (attempt + 1))

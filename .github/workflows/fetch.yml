@@ -72,10 +72,11 @@ jobs:
           ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
         run: python -m src.run --export jobs.xlsx
 
-      # A first run finds ~12,000 postings at once. Announcing all of them is
-      # days of Telegram rate limit and reads as spam, so the first run seeds
-      # the database silently and alerting begins with the second.
-      - name: Baseline the alert queue on first run
+      # A first run finds ~12,000 postings at once. The fetcher above has
+      # already posted its normal quota from that queue; this drops the rest,
+      # because dripping out a 12,000-job back catalogue would take seven weeks
+      # and bury every genuinely new opening behind it.
+      - name: Clear the first run's backlog
         if: env.FIRST_RUN == '1'
         run: python -m src.run --mark-all-notified
 
