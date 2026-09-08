@@ -1,0 +1,7 @@
+# Optional extras. The core install (requirements.txt) stays small on purpose;
+# everything here pulls in heavy transitive dependencies.
+
+# Enables the `jobspy` source: scraped Indeed and LinkedIn listings.
+# Brings in pandas + numpy (~50MB). See the README on why this is opt-in, and
+# note it does NOT get you Naukri — that back-end returns "recaptcha required".
+python-jobspy==1.1.82

@@ -1,0 +1,337 @@
+# ---------------------------------------------------------------------------
+# What job-radar polls.
+#
+# Every company slug below was verified live by `python discover.py` — it
+# probes each name against every ATS and keeps only boards that actually
+# return postings. Do not hand-add slugs without checking them: the previous
+# version of this file shipped `smartrecruiters: Visa` and `Bosch`, both of
+# which return zero (the live Bosch slug is `BoschGroup`).
+#
+# To grow the list:
+#   python discover.py --file config/companies.txt --out found.yaml
+# To find what has since died:
+#   python verify_slugs.py                 # report
+#   python verify_slugs.py --prune         # rewrite this file without them
+#   python -m src.run --health             # what has been empty for 3+ runs
+#
+# Slug format per platform:
+#   greenhouse/lever/ashby/workable/...  the path segment in the careers URL
+#   workday                              tenant|wdN|SiteName
+#   oraclecloud                          host|siteNumber
+#   phenom                               the careers hostname
+#   rss / jsonld / sitemap               a full URL
+# ---------------------------------------------------------------------------
+
+sources:
+
+  # ---- Per-company ATS boards (verified) ---------------------------------
+  greenhouse:
+    - adyen
+    - affirm
+    - airtable
+    - amplitude
+    - anthropic
+    - asana
+    - braze
+    - brex
+    - buildkite
+    - calendly
+    - chime
+    - circleci
+    - cloudflare
+    - cockroachlabs
+    - coinbase
+    - cultureamp
+    - customerio
+    - databricks
+    - datadog
+    - discord
+    - dropbox
+    - druva
+    - elastic
+    - fastly
+    - figma
+    - fivetran
+    - ghost
+    - gitlab
+    - gocardless
+    - grafanalabs
+    - groww
+    - gusto
+    - hightouch
+    - honeycomb
+    - imply
+    - instacart
+    - intercom
+    - iterable
+    - jfrog
+    - lattice
+    - launchdarkly
+    - lightmatter
+    - mixpanel
+    - mongodb
+    - monzo
+    - n26
+    - netlify
+    - newrelic
+    - observeai
+    - okta
+    - pagerduty
+    - planetscale
+    - postman
+    - prisma
+    - range
+    - reddit
+    - remotecom
+    - robinhood
+    - samsara
+    - scaleai
+    - slice
+    - squarespace
+    - startree
+    - storyblok
+    - stripe
+    - thoughtworks
+    - togetherai
+    - twilio
+    - twitch
+    - typeform
+    - vercel
+    - webflow
+    - wise
+  lever:
+    - cred
+    - meesho
+    - neon
+    - palantir
+    - paytm
+    - porter
+    - zeta
+  ashby:
+    - airbyte
+    - apollo-graphql
+    - astronomer
+    - atlan
+    - cerebras
+    - clickhouse
+    - cohere
+    - confluent
+    - crisp
+    - dust
+    - ghost
+    - helpscout
+    - hightouch
+    - influxdata
+    - iterable
+    - kong
+    - langchain
+    - linear
+    - miro
+    - mollie
+    - navi
+    - neon
+    - notion
+    - nubank
+    - openai
+    - oyster
+    - perplexity
+    - pinecone
+    - plaid
+    - pleo
+    - posthog
+    - prefect
+    - ramp
+    - range
+    - render
+    - replit
+    - runway
+    - sanity
+    - sentry
+    - snowflake
+    - supabase
+    - surveymonkey
+    - temporal
+    - weaviate
+    - workhuman
+    - zapier
+  smartrecruiters:
+    - BoschGroup
+    - canva
+    - cars24
+    - freshworks
+    - glean
+    - ixigo
+    - lendingkart
+    - newrelic
+    - nobroker
+    - palantir
+    - rebelfoods
+    - swiggy
+    - turtlemint
+    - uber
+    - unacademy
+    - upstox
+    - whatfix
+    - wise
+  workable: []
+  recruitee:
+    - accenture
+    - navi
+    - personio
+    - prisma
+  bamboohr:
+    - coda
+    - digitalocean
+    - flyio
+    - observeai
+    - posthog
+    - range
+    - slite
+    - techmahindra
+    - zepto
+  breezy:
+    - census
+  teamtailor: []
+  personio: []
+  rippling:
+    - bonusly
+    - freshworks
+    - rippling
+
+  # ---- Large-employer platforms ------------------------------------------
+  # Workday: tenant|wdN|SiteName. These twelve were confirmed live out of 53
+  # guessed; the format has three unknowns, so guessing is mostly wasted.
+  workday:
+    - micron|wd1|External
+    - nvidia|wd5|NVIDIAExternalCareerSite
+    - citi|wd5|2
+    - target|wd5|targetcareers
+    - salesforce|wd12|External_Career_Site
+    - hpe|wd5|Jobsathpe
+    - mastercard|wd1|CorporateCareers
+    - philips|wd3|jobs-and-careers
+    - adobe|wd5|external_experienced
+    - autodesk|wd1|Ext
+    - workday|wd5|Workday
+    - paypal|wd1|jobs
+
+  # Oracle Cloud Recruiting (ORC), host|siteNumber. Common at large Indian
+  # employers. Many ORC hosts simply time out from outside their region.
+  oraclecloud:
+    - eeho.fa.us2.oraclecloud.com|CX_1
+    - ekjk.fa.em2.oraclecloud.com|CX_1
+
+  # Phenom People. Most tenants serve an HTML shell instead of the JSON API,
+  # so this list stays short by nature.
+  phenom:
+    - careers.pepsico.com
+
+  # ---- Broad search: no slug needed, reaches employers we never listed ----
+
+  # Cross-company SmartRecruiters search. One call per keyword, 100 rows each,
+  # no paging — so breadth comes from the keyword list in src/sources.py.
+  smartrecruiters_search:
+
+  # Instahyre — India-only and almost entirely IT. ~13k live postings, the
+  # single highest-yield India source. Argument is the max to pull per run.
+  instahyre:
+    - 1400
+
+  # Adzuna. Needs free ADZUNA_APP_ID / ADZUNA_APP_KEY in .env; skips itself
+  # silently when they are absent. '<country>|<pages>'. This is the legitimate
+  # route to Naukri/Indeed-class inventory — see the README on why there is no
+  # scraper for either.
+  adzuna:
+    - in|8
+    - gb|3
+    - us|3
+
+  # Scraped boards via python-jobspy. OPT-IN and not installed by default:
+  #   pip install -r requirements-optional.txt
+  # Without it the source skips itself and says so in --health, so leaving
+  # these lines here costs nothing.
+  #
+  # Format: site|search term|location|count.
+  # Only `indeed` and `linkedin` actually return anything — naukri answers
+  # "recaptcha required", glassdoor/ziprecruiter/bayt answer 403. Indeed is
+  # fast (~100 jobs in 3s); LinkedIn is slow (~100 in 56s) and rate-limits, so
+  # keep its counts low.
+  jobspy:
+    - indeed|software engineer|India|200
+    - indeed|backend developer|India|200
+    - indeed|full stack developer|India|200
+    - indeed|data engineer|India|150
+    - indeed|devops engineer|India|150
+    - indeed|qa automation|India|100
+    - indeed|python developer|India|150
+    - indeed|java developer|India|150
+    - linkedin|software engineer|India|50
+    - linkedin|data scientist|India|50
+
+  # ---- Aggregator feeds (no slug) ----------------------------------------
+  remoteok:
+  arbeitnow:
+  remotive:
+  jobicy:
+  himalayas:
+  workingnomads:
+  landingjobs:
+  themuse:
+    - 5
+  # hackernews:    # uncomment around the 1st: the monthly "Who is hiring?" thread
+
+  # ---- Generic crawlers ---------------------------------------------------
+  rss:
+    - https://weworkremotely.com/remote-jobs.rss
+    - https://weworkremotely.com/categories/remote-programming-jobs.rss
+    - https://weworkremotely.com/categories/remote-full-stack-programming-jobs.rss
+    - https://weworkremotely.com/categories/remote-devops-sysadmin-jobs.rss
+    - https://weworkremotely.com/categories/remote-back-end-programming-jobs.rss
+    - https://weworkremotely.com/categories/remote-front-end-programming-jobs.rss
+    - https://himalayas.app/jobs/rss
+    - https://nodesk.co/remote-jobs/index.xml
+    - https://www.python.org/jobs/feed/rss/
+    - https://larajobs.com/feed
+
+  # Any careers page carrying schema.org JobPosting markup. Add the LISTING
+  # page, not a single job — and note most listing pages are JS shells with no
+  # markup, in which case use `sitemap` instead.
+  jsonld: []
+
+  # Bounded sitemap crawl for companies with no public board at all. Slow and
+  # low-yield; reach for it last. '<url>' or '<url>|<max_pages>'.
+  sitemap: []
+
+
+filters:
+  # Keep only IT/software/data/infra roles. Leave this on: the broad sources
+  # above are general-purpose, and Bosch alone contributes 1,000 postings that
+  # are mostly not tech. Patterns live in src/filters.py (IT_TITLE / NOT_IT).
+  it_only: true
+
+  # Set true to see only internships / new-grad / SDE-1 style openings.
+  # Off by default so the radar shows every IT role it can reach.
+  entry_level_only: false
+
+  # Drop postings demanding more than this many years. 99 = no cap.
+  max_years_experience: 99
+
+  # Substring match against the posting location. EMPTY MEANS EVERY LOCATION,
+  # which is what "maximum results" wants. Uncomment the India block to narrow.
+  locations: []
+  #  - bangalore
+  #  - hyderabad
+  #  - pune
+  #  - chennai
+  #  - mumbai
+  #  - delhi
+  #  - gurugram
+  #  - noida
+  #  - remote
+  #  - india
+
+  # Require at least one of these in title or description. Empty = skip.
+  keywords: []
+
+  # Companies you never want to hear from again.
+  block_companies: []

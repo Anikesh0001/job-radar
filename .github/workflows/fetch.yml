@@ -1,0 +1,131 @@
+name: fetch jobs
+
+on:
+  schedule:
+    # Every 4 hours. GitHub queues scheduled runs under load, so treat the time
+    # as approximate — it is often several minutes late and occasionally skips
+    # one entirely. That is fine here: the next run posts whatever was missed,
+    # because the alert queue lives in the database, not in the run that found
+    # the jobs. Cron is UTC; 0,4,8,12,16,20 UTC is 05:30, 09:30... IST.
+    - cron: "0 */4 * * *"
+  workflow_dispatch:
+    inputs:
+      reset_queue:
+        description: "Re-queue every stored posting (drains at the per-run limit)"
+        type: boolean
+        default: false
+
+# Two runs at once would race on the same state and could double-post.
+concurrency:
+  group: fetch
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  # The database and the spreadsheet are kept as assets on this release rather
+  # than committed. Committing a 1.7MB binary six times a day is 5.6GB of git
+  # history a year, which turns an unattended repo into a liability; release
+  # assets are replaced in place and leave git history untouched.
+  STATE_TAG: data
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore database from the state release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release download "$STATE_TAG" --pattern jobs.db.gz --clobber 2>/dev/null; then
+            gunzip -f jobs.db.gz
+            echo "restored $(du -h jobs.db | cut -f1) database"
+          else
+            echo "no state release yet — first run, starting from empty"
+            echo "FIRST_RUN=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Re-queue everything (manual runs only)
+        if: github.event.inputs.reset_queue == 'true'
+        run: python -m src.run --reset-notified
+
+      - name: Run fetcher
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          # Optional; the adzuna source skips itself when these are unset.
+          ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
+          ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
+        run: python -m src.run --export jobs.xlsx
+
+      # A first run finds ~12,000 postings at once. Announcing all of them is
+      # days of Telegram rate limit and reads as spam, so the first run seeds
+      # the database silently and alerting begins with the second.
+      - name: Baseline the alert queue on first run
+        if: env.FIRST_RUN == '1'
+        run: python -m src.run --mark-all-notified
+
+      - name: Save state back to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gzip -9f jobs.db
+          gh release view "$STATE_TAG" >/dev/null 2>&1 || \
+            gh release create "$STATE_TAG" \
+              --title "Live data" \
+              --notes "Database and spreadsheet for the job feed. Replaced automatically on every run; do not delete." \
+              --latest=false
+          gh release upload "$STATE_TAG" jobs.db.gz jobs.xlsx --clobber
+
+  # GitHub disables scheduled workflows in a public repo after 60 days with no
+  # repository activity, and neither release uploads nor commits made by the
+  # built-in GITHUB_TOKEN reset that timer. A feed that runs perfectly would
+  # still go silent after two months. One real commit a week, pushed with a
+  # personal access token, keeps the schedule alive. Skipped without GH_PAT.
+  keepalive:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    permissions:
+      contents: write
+    # The `secrets` context is not available in a step's `if:`, only `env` is,
+    # so the presence of the token has to be lifted into env first.
+    env:
+      GH_PAT: ${{ secrets.GH_PAT }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Touch the repo once a week
+        if: env.GH_PAT != ''
+        run: |
+          # git log exits 0 with empty output when the file has never existed,
+          # so the `||` never fires — default it explicitly rather than relying
+          # on bash treating an empty string as 0 in arithmetic.
+          last=$(git log -1 --format=%ct -- .keepalive 2>/dev/null)
+          last=${last:-0}
+          now=$(date -u +%s)
+          if [ $(( (now - last) / 86400 )) -lt 7 ]; then
+            echo "touched $(( (now - last) / 86400 )) day(s) ago — nothing to do"
+            exit 0
+          fi
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > .keepalive
+          git config user.name  "job-radar[bot]"
+          git config user.email "job-radar@users.noreply.github.com"
+          git add .keepalive
+          git commit -m "keepalive $(date -u +'%Y-%m-%d')"
+          git push

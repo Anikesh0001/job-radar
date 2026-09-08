@@ -1,0 +1,324 @@
+# Seed list for `python discover.py --file config/companies.txt`.
+# Company names, one per line. discover.py derives slug variants itself.
+# Nothing here is assumed live — discovery is what decides.
+
+# --- Indian IT services / GCC ---
+Tata Consultancy Services
+Infosys
+Wipro
+HCLTech
+Tech Mahindra
+LTIMindtree
+Mphasis
+Persistent Systems
+Cognizant
+Accenture
+Capgemini
+Zensar
+Hexaware
+Coforge
+Birlasoft
+Cyient
+KPIT
+Sonata Software
+Happiest Minds
+Mastek
+Newgen Software
+Nucleus Software
+Ramco Systems
+Subex
+Tata Elxsi
+ThoughtWorks
+Zoho
+Freshworks
+Chargebee
+Postman
+BrowserStack
+Hasura
+Zeta
+Innovaccer
+Icertis
+Druva
+Whatfix
+CleverTap
+MoEngage
+Netcore
+Capillary Technologies
+Locus
+Darwinbox
+Keka
+Kissflow
+Facilio
+Zluri
+Atlan
+SirionLabs
+LeadSquared
+Exotel
+Knowlarity
+Gupshup
+Yellow ai
+Haptik
+Uniphore
+Observe AI
+Rezo AI
+
+# --- Indian consumer / unicorns ---
+Flipkart
+Myntra
+Swiggy
+Zomato
+Zepto
+Blinkit
+Meesho
+PhonePe
+Paytm
+Razorpay
+Zerodha
+Groww
+Upstox
+CRED
+slice
+Jupiter
+Navi
+Khatabook
+Cashfree
+Juspay
+Pine Labs
+BharatPe
+MobiKwik
+Policybazaar
+Acko
+Digit Insurance
+Turtlemint
+InCred
+Lendingkart
+KreditBee
+Ola
+Ola Electric
+Uber
+Rapido
+Delhivery
+Shiprocket
+Udaan
+ShareChat
+Josh
+Dream11
+MPL
+Games24x7
+Nazara
+Unacademy
+Byjus
+Vedantu
+upGrad
+Simplilearn
+Scaler
+Practo
+PharmEasy
+Tata 1mg
+Cure fit
+HealthifyMe
+Urban Company
+NoBroker
+Housing
+MagicBricks
+MakeMyTrip
+Yatra
+Ixigo
+Cleartrip
+Nykaa
+Lenskart
+boAt
+Cars24
+Spinny
+CarDekho
+Droom
+Licious
+Country Delight
+Bigbasket
+Dunzo
+Porter
+Zetwerk
+Infra market
+OfBusiness
+Moglix
+Ninjacart
+DeHaat
+Jumbotail
+Purplle
+Mamaearth
+WakeFit
+Pepperfry
+Rebel Foods
+
+# --- Global tech with public boards ---
+Stripe
+Databricks
+Dropbox
+GitLab
+Cloudflare
+Discord
+Coinbase
+DoorDash
+Instacart
+Figma
+Anthropic
+Reddit
+Twilio
+Affirm
+Robinhood
+Samsara
+Airtable
+Asana
+Atlassian
+Canva
+Datadog
+Elastic
+Grafana Labs
+HashiCorp
+MongoDB
+Notion
+Okta
+Palantir
+Plaid
+Ramp
+Brex
+Retool
+Rippling
+Scale AI
+Snowflake
+Snyk
+SurveyMonkey
+Twitch
+Unity
+Vercel
+Netlify
+Supabase
+PlanetScale
+Render
+Fly io
+Linear
+Replit
+Runway
+OpenAI
+Hugging Face
+Cohere
+Perplexity
+Mistral AI
+Weights and Biases
+LangChain
+Pinecone
+Weaviate
+Chroma
+Modal Labs
+Together AI
+Groq
+Cerebras
+SambaNova
+Lightmatter
+Zapier
+Miro
+Loom
+Calendly
+Gusto
+Deel
+Remote com
+Oyster
+Papaya Global
+Personio
+Pleo
+Klarna
+Revolut
+Monzo
+Starling Bank
+N26
+Wise
+Checkout com
+Adyen
+Mollie
+GoCardless
+Marqeta
+Chime
+Nubank
+Rappi
+Mercado Libre
+Shopify
+Squarespace
+Wix
+Webflow
+Contentful
+Sanity
+Storyblok
+Strapi
+Ghost
+Automattic
+DigitalOcean
+Linode
+Heroku
+Fastly
+Akamai
+Sentry
+Honeycomb
+New Relic
+PagerDuty
+Split
+LaunchDarkly
+CircleCI
+Buildkite
+JFrog
+Sonar
+Postman Labs
+Kong
+Tyk
+Apollo GraphQL
+Prisma
+Neon
+Cockroach Labs
+Timescale
+InfluxData
+ClickHouse
+StarTree
+Imply
+Confluent
+Redpanda
+Temporal
+Airbyte
+Fivetran
+dbt Labs
+Dagster
+Prefect
+Astronomer
+Monte Carlo
+Great Expectations
+Census
+Hightouch
+Amplitude
+Mixpanel
+Heap
+PostHog
+Segment
+Braze
+Iterable
+Customer io
+Intercom
+Front
+Zendesk
+Freshdesk
+Help Scout
+Crisp
+Typeform
+Airtable Labs
+Coda
+Slab
+Slite
+Nuclino
+Almanac
+Range
+Culture Amp
+Lattice
+15Five
+Workhuman
+Bonusly
+Guru
+Glean
+Dust
+Sana Labs

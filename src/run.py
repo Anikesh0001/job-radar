@@ -1,0 +1,270 @@
+"""Entry point.  python -m src.run [--dry-run] [--no-filter] [--config PATH]"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import random
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+import yaml
+
+from .db import PRUNE_AFTER_DAYS, Store
+from .export import export
+from .filters import Filter
+from .models import Job
+from .notify import (DEFAULT_PER_RUN, SECONDS_BETWEEN_MESSAGES, send_discord,
+                     send_telegram, write_markdown)
+from .sources import Skipped, fetch_one, iter_targets
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-7s %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("job-radar")
+
+# httpx logs every request at INFO. With 200+ targets, several of them paged,
+# that buries the per-source summary under thousands of lines.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+def load_config(path: str) -> dict:
+    with open(path, encoding="utf-8") as fh:
+        return yaml.safe_load(fh) or {}
+
+
+def fetch_all(config: dict, workers: int = 6) -> tuple[list[Job], list[tuple]]:
+    """Fetch every configured target.
+
+    Returns (jobs, health) where health is one (platform, slug, count, error)
+    row per target, so the caller can tell "this source returned nothing" from
+    "this source was never asked".
+    """
+    targets = list(iter_targets(config))
+    log.info("fetching %d targets with %d workers", len(targets), workers)
+    jobs: list[Job] = []
+    health: list[tuple] = []
+
+    def task(pair):
+        platform, slug = pair
+        # Jitter so we never look like a burst to any single host.
+        time.sleep(random.uniform(0.2, 1.0))
+        return fetch_one(platform, slug)
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(task, t): t for t in targets}
+        for fut in as_completed(futures):
+            platform, slug = futures[fut]
+            try:
+                got = fut.result()
+                health.append((platform, slug, len(got), None))
+                jobs.extend(got)
+            except Skipped as e:
+                # Deliberate, not a failure — record the reason so --health can
+                # say "needs a key" instead of implying the source is broken.
+                health.append((platform, slug, 0, f"skipped: {e}"))
+            except Exception as e:  # noqa: BLE001 - fetch_one swallows, this is belt-and-braces
+                log.warning("%s/%s crashed: %s", platform, slug, e)
+                health.append((platform, slug, 0, f"{type(e).__name__}: {e}"))
+            done += 1
+            if done % 25 == 0:
+                log.info("  ...%d/%d targets, %d postings so far",
+                         done, len(targets), len(jobs))
+
+    log.info("fetched %d raw postings from %d targets", len(jobs), len(targets))
+    return jobs, health
+
+
+def summarise(raw: list[Job], relevant: list[Job], health: list[tuple]) -> None:
+    """Per-source table. The number that matters is 'kept', not 'fetched' —
+    a source pulling 4,000 postings of which none are IT roles is dead weight."""
+    from collections import Counter
+
+    fetched = Counter(j.source for j in raw)
+    kept = Counter(j.source for j in relevant)
+    dead = [(p, s) for p, s, n, _ in health if n == 0]
+
+    log.info("")
+    log.info("%-26s %9s %9s", "source", "fetched", "kept")
+    log.info("%s", "-" * 46)
+    for src in sorted(fetched, key=lambda k: -fetched[k]):
+        log.info("%-26s %9d %9d", src, fetched[src], kept.get(src, 0))
+    log.info("%s", "-" * 46)
+    log.info("%-26s %9d %9d", "TOTAL", len(raw), len(relevant))
+    if dead:
+        log.info("%d target(s) returned nothing this run "
+                 "(run --health for the persistent ones)", len(dead))
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="job-radar")
+    ap.add_argument("--config", default="config/sources.yaml")
+    ap.add_argument("--db", default="jobs.db")
+    ap.add_argument("--dry-run", action="store_true", help="fetch and filter, send nothing")
+    ap.add_argument("--no-filter", action="store_true", help="keep every posting")
+    ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument(
+        "--export",
+        default="jobs.xlsx",
+        metavar="PATH",
+        help="write results to a file; format from the extension "
+        "(.xlsx/.csv/.txt). Default: jobs.xlsx. Pass '' to skip.",
+    )
+    # The export defaults to the WHOLE database, not this run's new postings.
+    # The other way round was a trap: the sheet you actually work from got
+    # silently replaced with a 25-row digest the moment you ran without
+    # --export-all, and nothing in the output made that look like data loss.
+    ap.add_argument(
+        "--export-new-only",
+        action="store_true",
+        help="export only this run's new postings instead of the whole database",
+    )
+    ap.add_argument(
+        "--export-all",
+        action="store_true",
+        help=argparse.SUPPRESS,  # now the default; kept so old commands still work
+    )
+    ap.add_argument(
+        "--prune-days", type=int, default=PRUNE_AFTER_DAYS, metavar="N",
+        help=f"delete postings unseen for N days (default {PRUNE_AFTER_DAYS}); "
+             "0 disables pruning",
+    )
+    ap.add_argument(
+        "--notify-limit", type=int, default=DEFAULT_PER_RUN, metavar="N",
+        help=f"max Telegram messages per run (default {DEFAULT_PER_RUN}); "
+             "the rest stay queued for the next run",
+    )
+    ap.add_argument(
+        "--mark-all-notified", action="store_true",
+        help="mark everything already stored as delivered and exit — run this "
+             "once when switching alerts on, so you get new postings from now "
+             "on instead of the entire backlog",
+    )
+    ap.add_argument(
+        "--reset-notified", action="store_true",
+        help="put every stored posting back in the alert queue, so the backlog "
+             "drips out at --notify-limit per run alongside new finds",
+    )
+    ap.add_argument(
+        "--health",
+        action="store_true",
+        help="print sources that have returned nothing for several runs, then exit",
+    )
+    ap.add_argument(
+        "--min-streak", type=int, default=3,
+        help="how many consecutive empty runs counts as broken (--health)",
+    )
+    args = ap.parse_args(argv)
+
+    if args.mark_all_notified:
+        with Store(args.db) as store:
+            n = store.mark_all_notified()
+            print(f"marked {n} stored posting(s) as already delivered")
+            print("alerts will now cover only postings found from here on")
+        return 0
+
+    if args.reset_notified:
+        with Store(args.db) as store:
+            n = store.reset_notified()
+            print(f"queued {n} posting(s) for delivery")
+            print(f"at the default limit that is ~{n // 40 + 1} run(s) to drain")
+        return 0
+
+    if args.health:
+        # Only report what is still configured. Removing a dead slug from the
+        # config leaves its row in source_health for ever, and a report that
+        # keeps naming slugs you already deleted trains you to ignore it.
+        configured = None
+        if Path(args.config).exists():
+            configured = {(p, s) for p, s in iter_targets(load_config(args.config))}
+        with Store(args.db) as store:
+            rows = store.unhealthy(args.min_streak)
+            if configured is not None:
+                rows = [r for r in rows if (r["platform"], r["slug"]) in configured]
+            if not rows:
+                print(f"no source has been empty for {args.min_streak}+ runs")
+                return 0
+            print(f"{len(rows)} target(s) empty for {args.min_streak}+ consecutive runs:")
+            print(f"  {'platform':<18}{'slug':<34}{'runs':>5}  last ok / error")
+            for r in rows:
+                note = r["last_error"] or (f"last ok {r['last_ok'][:10]}"
+                                           if r["last_ok"] else "never returned anything")
+                print(f"  {r['platform']:<18}{(r['slug'] or '(feed)')[:33]:<34}"
+                      f"{r['zero_streak']:>5}  {note[:60]}")
+            print("\nFix the slug in config/sources.yaml, "
+                  "or drop it with: python verify_slugs.py --prune")
+        return 0
+
+    if not Path(args.config).exists():
+        log.error("config not found: %s", args.config)
+        return 1
+
+    config = load_config(args.config)
+    raw, health = fetch_all(config, workers=args.workers)
+
+    if args.no_filter:
+        relevant = raw
+    else:
+        f = Filter(config)
+        relevant = f.apply(raw)
+    log.info("%d postings passed filters", len(relevant))
+    summarise(raw, relevant, health)
+
+    with Store(args.db) as store:
+        store.record_health(health)
+        new = store.insert_new(relevant)
+        if args.prune_days:
+            store.prune(args.prune_days)
+        log.info("%d new after dedupe (%d total in db)", len(new), store.count())
+
+        for j in new:
+            print(f"  NEW  {j}")
+
+        # Export before any early return: a run that found nothing new should
+        # still refresh the sheet when --export-all was asked for.
+        if args.export:
+            rows = new if args.export_new_only else store.all_jobs()
+            if rows:
+                export(rows, args.export)
+            elif args.export_new_only:
+                log.info("nothing new to export (the full sheet is the default; "
+                         "drop --export-new-only to rewrite it)")
+            else:
+                log.info("nothing to export")
+
+        if not new:
+            log.info("nothing new — done")
+            return 0
+
+        if args.dry_run:
+            log.info("dry run — not sending")
+            return 0
+
+        write_markdown(new)
+
+        # The alert queue is whatever is still undelivered, not just this run's
+        # finds — a run that adds 800 postings can only post ~40 inside
+        # Telegram's rate limit, and the rest must wait rather than vanish.
+        queue = store.pending_jobs(args.notify_limit)
+        outstanding = store.pending_count()
+        if queue:
+            log.info("telegram: posting %d of %d queued (one message each, "
+                     "~%.1fs apart)", len(queue), outstanding,
+                     SECONDS_BETWEEN_MESSAGES)
+            send_telegram(queue, on_sent=lambda j: store.mark_notified([j]))
+            left = store.pending_count()
+            if left:
+                log.info("telegram: %d still queued, will go out next run", left)
+        send_discord(new)
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
