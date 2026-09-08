@@ -15,9 +15,10 @@ on:
         type: boolean
         default: false
 
-# Two runs at once would race on the same state and could double-post.
+# Shared with post.yml: both mutate the same database, and two runs writing the
+# state release at once would lose whichever finished first.
 concurrency:
-  group: fetch
+  group: job-radar-state
   cancel-in-progress: false
 
 permissions:

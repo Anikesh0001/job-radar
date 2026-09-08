@@ -158,13 +158,35 @@ Then close the tab. That is the whole job.
 
 ## What happens from here, without you
 
+There are **two** workflows, and the split is the point:
+
+| Workflow | Runs | What it does |
+|---|---|---|
+| **fetch jobs** | every 4 hours | Polls 209 sources, filters, dedupes, stores, refreshes the spreadsheet, posts its share |
+| **post jobs** | every hour | Posts ~20 more from the queue. Fetches nothing. |
+
+Postings are found far faster than Telegram will announce them — roughly 1,500
+a day discovered against ~20 a minute deliverable — so there is always a
+backlog. Fetching hourly would hammer 209 public APIs for no benefit; posting
+hourly from what is already stored costs nothing and is what turns six bursts a
+day into a steady feed. A `post jobs` run takes about a minute and makes no
+request to any job board.
+
+Both share a `job-radar-state` concurrency group, so they queue behind each
+other rather than clobbering the same database.
+
 | When | What |
 |---|---|
-| Every 4 hours | Fetch 209 sources, filter to IT roles, dedupe, post up to 40 to Telegram, refresh the spreadsheet |
+| Every hour | ~20 postings to Telegram, newest first, sources interleaved |
+| Every 4 hours | Full fetch across 209 sources; spreadsheet refreshed |
 | Every run | State saved back to the `data` release |
-| Every run | Postings unseen for 60 days deleted, so the database stays flat |
+| Every run | Queued postings older than 14 days dropped rather than posted stale |
+| Every fetch | Postings unseen for 60 days deleted, so the database stays flat |
 | Weekly | One keepalive commit, so the schedule is never auto-disabled |
 | Yearly | **You** renew `GH_PAT` |
+
+Nothing runs on your machine. Your laptop can be off, asleep, or in another
+country — this all executes on GitHub's runners.
 
 The spreadsheet is always downloadable at a stable URL:
 
@@ -192,10 +214,18 @@ matter how long it runs.
 
 ## Choosing how much to post
 
-The channel posts **up to 40 jobs per run, six runs a day** — roughly 240 a
-day, paced 3.5 seconds apart to stay inside Telegram's ~20-messages-per-minute
+The channel posts **~20 jobs an hour, around the clock** — roughly 480 a day,
+paced 3.5 seconds apart to stay inside Telegram's ~20-messages-per-minute
 limit. Anything over the limit stays queued in the database and goes out next
-run, so nothing is lost and nothing floods.
+hour, so nothing is lost and nothing floods.
+
+To change the rate, edit the `--notify-limit` in
+`.github/workflows/post.yml`, or its `cron` for a different interval:
+
+```yaml
+- cron: "30 * * * *"                          # hourly → "30 */2 * * *" for less
+run: python -m src.run --post-only --notify-limit 20
+```
 
 **Default: only postings found from now on.** A typical run turns up 20-120 new
 jobs, so the channel stays busy on its own.

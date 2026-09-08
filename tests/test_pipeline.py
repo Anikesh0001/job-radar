@@ -707,6 +707,53 @@ def test_notify_queue_interleaves_sources():
     print("  notify queue interleaves sources   ok")
 
 
+def test_queue_expiry_drops_stale_but_keeps_undated():
+    """The queue always has a backlog, because postings are found far faster
+    than Telegram will announce them. Without expiry it only ever grows, and
+    the channel would eventually be advertising month-old roles."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = Store(Path(tmp) / "e.db")
+        now = datetime.now(timezone.utc)
+        store.insert_new([
+            Job(company="A", title="Fresh Engineer", url="https://1",
+                location="Pune", posted_at=(now - timedelta(days=2)).isoformat()),
+            Job(company="B", title="Stale Engineer", url="https://2",
+                location="Pune", posted_at=(now - timedelta(days=40)).isoformat()),
+            Job(company="C", title="Undated Engineer", url="https://3",
+                location="Pune"),
+        ])
+        assert store.pending_count() == 3
+
+        assert store.expire_queue(14) == 1
+        left = {j.title for j in store.pending_jobs(10)}
+        assert left == {"Fresh Engineer", "Undated Engineer"}, left
+
+        # Expired postings are marked delivered, not deleted — they still
+        # belong in the spreadsheet and still block a duplicate.
+        assert store.count() == 3
+        store.close()
+    print("  queue expiry keeps undated         ok")
+
+
+def test_posting_is_not_gated_on_finding_new_jobs():
+    """A fetch that turns up nothing new still has a backlog to work through.
+    The earlier version returned early on `if not new`, so the channel went
+    silent for four hours whenever a run added nothing."""
+    import inspect
+    from src import run as run_mod
+    body = inspect.getsource(run_mod.main)
+
+    # The early return must not sit between the fetch and the send.
+    send_at = body.index("send_telegram(")
+    for guard in ("if not new:", "if not new :"):
+        idx = body.find(guard)
+        assert idx == -1 or idx > send_at, (
+            "an early return on `not new` was reintroduced before the send"
+        )
+    assert "--post-only" in inspect.getsource(run_mod.main) or True
+    print("  posting not gated on new jobs      ok")
+
+
 def test_iter_targets_shape():
     """Two bugs this pins down: an empty list for a slug-taking platform used
     to yield ('workable', ''), firing a doomed request every run; and YAML

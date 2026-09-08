@@ -1,0 +1,82 @@
+name: post jobs
+
+# Keeps the channel ticking between fetches.
+#
+# fetch.yml runs every four hours because polling 209 sources more often than
+# that is rude and pointless. But postings arrive faster than Telegram's rate
+# limit can announce them (~1,500 a day found, ~20 a minute deliverable), so
+# there is always a backlog. This posts from that backlog every hour without
+# fetching anything, which is what turns six bursts a day into a steady feed.
+#
+# A run takes about a minute and makes no requests to any job source.
+
+on:
+  schedule:
+    # Every hour, on the half hour, so it never collides with fetch.yml's
+    # on-the-hour slot.
+    - cron: "30 * * * *"
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "How many postings to send"
+        type: string
+        default: "20"
+
+# Shared with fetch.yml: both mutate the same database, and two runs writing
+# the state release at once would lose whichever finished first.
+concurrency:
+  group: job-radar-state
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  STATE_TAG: data
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore database
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release download "$STATE_TAG" --pattern jobs.db.gz --clobber 2>/dev/null; then
+            gunzip -f jobs.db.gz
+          else
+            echo "no state release yet — fetch jobs has not run, nothing to post"
+            echo "SKIP=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Post from the queue
+        if: env.SKIP != '1'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          python -m src.run --post-only \
+            --notify-limit "${{ github.event.inputs.count || 20 }}"
+
+      # Only the notified flags changed, but the whole file has to go back or
+      # the next run re-posts everything this one just sent.
+      - name: Save state
+        if: env.SKIP != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gzip -9f jobs.db
+          gh release upload "$STATE_TAG" jobs.db.gz --clobber

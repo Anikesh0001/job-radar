@@ -12,7 +12,7 @@ from pathlib import Path
 
 import yaml
 
-from .db import PRUNE_AFTER_DAYS, Store
+from .db import PRUNE_AFTER_DAYS, QUEUE_MAX_AGE_DAYS, Store
 from .export import export
 from .filters import Filter
 from .models import Job
@@ -131,6 +131,16 @@ def main(argv=None) -> int:
         help=argparse.SUPPRESS,  # now the default; kept so old commands still work
     )
     ap.add_argument(
+        "--post-only", action="store_true",
+        help="skip fetching and just post what is already queued; use this on a "
+             "short schedule to keep the channel ticking between fetches",
+    )
+    ap.add_argument(
+        "--queue-max-age", type=int, default=QUEUE_MAX_AGE_DAYS, metavar="N",
+        help=f"drop queued postings older than N days instead of announcing "
+             f"them late (default {QUEUE_MAX_AGE_DAYS}); 0 keeps everything",
+    )
+    ap.add_argument(
         "--prune-days", type=int, default=PRUNE_AFTER_DAYS, metavar="N",
         help=f"delete postings unseen for N days (default {PRUNE_AFTER_DAYS}); "
              "0 disables pruning",
@@ -205,52 +215,59 @@ def main(argv=None) -> int:
         log.error("config not found: %s", args.config)
         return 1
 
-    config = load_config(args.config)
-    raw, health = fetch_all(config, workers=args.workers)
+    store = Store(args.db)
+    try:
+        # --post-only skips the fetch entirely and just drains the queue. That
+        # is what makes a steady feed possible: fetching 209 sources every hour
+        # would hammer them for no benefit, but posting every hour from what is
+        # already stored costs nothing and keeps the channel alive between
+        # fetches instead of going quiet for four hours at a time.
+        new: list[Job] = []
+        if not args.post_only:
+            config = load_config(args.config)
+            raw, health = fetch_all(config, workers=args.workers)
 
-    if args.no_filter:
-        relevant = raw
-    else:
-        f = Filter(config)
-        relevant = f.apply(raw)
-    log.info("%d postings passed filters", len(relevant))
-    summarise(raw, relevant, health)
-
-    with Store(args.db) as store:
-        store.record_health(health)
-        new = store.insert_new(relevant)
-        if args.prune_days:
-            store.prune(args.prune_days)
-        log.info("%d new after dedupe (%d total in db)", len(new), store.count())
-
-        for j in new:
-            print(f"  NEW  {j}")
-
-        # Export before any early return: a run that found nothing new should
-        # still refresh the sheet when --export-all was asked for.
-        if args.export:
-            rows = new if args.export_new_only else store.all_jobs()
-            if rows:
-                export(rows, args.export)
-            elif args.export_new_only:
-                log.info("nothing new to export (the full sheet is the default; "
-                         "drop --export-new-only to rewrite it)")
+            if args.no_filter:
+                relevant = raw
             else:
-                log.info("nothing to export")
+                relevant = Filter(config).apply(raw)
+            log.info("%d postings passed filters", len(relevant))
+            summarise(raw, relevant, health)
 
-        if not new:
-            log.info("nothing new — done")
-            return 0
+            store.record_health(health)
+            new = store.insert_new(relevant)
+            if args.prune_days:
+                store.prune(args.prune_days)
+            log.info("%d new after dedupe (%d total in db)", len(new), store.count())
+            for j in new:
+                print(f"  NEW  {j}")
+
+            if args.export:
+                rows = new if args.export_new_only else store.all_jobs()
+                if rows:
+                    export(rows, args.export)
+                elif args.export_new_only:
+                    log.info("nothing new to export (the full sheet is the "
+                             "default; drop --export-new-only to rewrite it)")
+                else:
+                    log.info("nothing to export")
+
+        # Postings arrive faster than Telegram can announce them, so anything
+        # that ages out while queued is dropped rather than posted late. Without
+        # this the queue only grows, and the oldest entries can never surface.
+        if args.queue_max_age:
+            expired = store.expire_queue(args.queue_max_age)
+            if expired:
+                log.info("dropped %d queued posting(s) older than %d days",
+                         expired, args.queue_max_age)
 
         if args.dry_run:
-            log.info("dry run — not sending")
+            log.info("dry run — not sending (%d queued)", store.pending_count())
             return 0
 
-        write_markdown(new)
-
-        # The alert queue is whatever is still undelivered, not just this run's
-        # finds — a run that adds 800 postings can only post ~40 inside
-        # Telegram's rate limit, and the rest must wait rather than vanish.
+        # Deliberately NOT gated on `new`: a run that finds nothing still has a
+        # backlog to work through, and the earlier version returned before this
+        # point, so the channel went silent whenever a fetch added nothing.
         queue = store.pending_jobs(args.notify_limit)
         outstanding = store.pending_count()
         if queue:
@@ -261,7 +278,14 @@ def main(argv=None) -> int:
             left = store.pending_count()
             if left:
                 log.info("telegram: %d still queued, will go out next run", left)
-        send_discord(new)
+        else:
+            log.info("nothing queued to post")
+
+        if new:
+            write_markdown(new)
+            send_discord(new)
+    finally:
+        store.close()
 
     return 0
 

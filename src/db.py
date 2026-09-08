@@ -77,6 +77,12 @@ DESCRIPTION_KEEP = 200
 # byte of it is re-committed by CI on every run.
 PRUNE_AFTER_DAYS = 60
 
+# Postings arrive faster than Telegram can announce them, so the queue always
+# has a backlog. Anything that ages out while waiting is dropped rather than
+# posted stale — otherwise the queue only ever grows and the channel would one
+# day be advertising month-old roles.
+QUEUE_MAX_AGE_DAYS = 14
+
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -360,6 +366,26 @@ class Store:
         self.conn.execute("UPDATE jobs SET notified = 0")
         self.conn.commit()
         return n
+
+    def expire_queue(self, days: int = QUEUE_MAX_AGE_DAYS) -> int:
+        """Silently drop queued postings older than `days`.
+
+        Marks them delivered rather than deleting them: they stay in the
+        spreadsheet and still count for deduplication, they just never get
+        announced. Undated postings are left alone — there is no way to tell
+        whether they are stale.
+        """
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=days)
+        ).isoformat(timespec="seconds")
+        cur = self.conn.execute(
+            """UPDATE jobs SET notified = 1
+               WHERE notified = 0 AND posted_at IS NOT NULL AND posted_at != ''
+                 AND posted_at < ?""",
+            (cutoff,),
+        )
+        self.conn.commit()
+        return cur.rowcount or 0
 
     def mark_all_notified(self) -> int:
         """Baseline the queue: treat everything already stored as delivered.
