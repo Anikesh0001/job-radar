@@ -322,19 +322,52 @@ filters:
   # rather than stale jobs.
   max_age_days: 30
 
-  # Substring match against the posting location. EMPTY MEANS EVERY LOCATION,
-  # which is what "maximum results" wants. Uncomment the India block to narrow.
-  locations: []
-  #  - bangalore
-  #  - hyderabad
-  #  - pune
-  #  - chennai
-  #  - mumbai
-  #  - delhi
-  #  - gurugram
-  #  - noida
-  #  - remote
-  #  - india
+  # Where the channel is aimed. A posting is kept if it is in one of these
+  # places, OR if it is remote from anywhere — see allow_remote below.
+  locations:
+    - india
+    - bangalore
+    - bengaluru
+    - hyderabad
+    - pune
+    - chennai
+    - mumbai
+    - delhi
+    - new delhi
+    - noida
+    - gurgaon
+    - gurugram
+    - kolkata
+    - ahmedabad
+    - jaipur
+    - kochi
+    - coimbatore
+    - indore
+    - chandigarh
+    - thiruvananthapuram
+    - visakhapatnam
+    - nagpur
+    - mysore
+    - mysuru
+    - bhubaneswar
+    - vadodara
+    - surat
+    - lucknow
+    - goa
+
+  # Indeed and several ATSes write "Bengaluru, KA, IN" and never the word
+  # "India". Without this a third of the India inventory is dropped.
+  countries:
+    - in
+
+  # A remote role is worth surfacing wherever the employer sits, so these pass
+  # the location check regardless of country.
+  allow_remote: true
+
+  # "drop" or "keep". With a country filter on, an unreadable location — an
+  # empty string, or Workday's "2 Locations" which never says which — is far
+  # more likely to be abroad than local, so it is noise.
+  unknown_location: drop
 
   # Require at least one of these in title or description. Empty = skip.
   keywords: []

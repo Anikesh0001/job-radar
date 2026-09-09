@@ -20,18 +20,33 @@
 sources:
   # Freshest India IT inventory. Indeed dates everything to the day.
   jobspy:
+    # Country-wide sweeps.
     - indeed|software engineer|India|100
     - indeed|backend developer|India|75
     - indeed|full stack developer|India|75
-    - indeed|data engineer|India|50
+    - indeed|data engineer|India|75
     - indeed|devops engineer|India|50
     - indeed|python developer|India|50
     - indeed|java developer|India|50
     - indeed|qa automation|India|50
+    - indeed|react developer|India|50
+    - indeed|data scientist|India|50
+    - indeed|cloud engineer|India|50
+    - indeed|business analyst|India|50
+    # Per-city, because a national search under-returns for the smaller hubs.
+    - indeed|software engineer|Bangalore, India|75
+    - indeed|software engineer|Hyderabad, India|50
+    - indeed|software engineer|Pune, India|50
+    - indeed|software engineer|Chennai, India|50
+    - indeed|software engineer|Noida, India|40
+    - indeed|software engineer|Gurugram, India|40
+    - indeed|software engineer|Mumbai, India|40
+    # Remote, which the location filter keeps wherever the employer sits.
+    - indeed|remote software engineer|India|50
 
   # India-only, almost entirely IT. Six pages is plenty at this cadence.
   instahyre:
-    - 210
+    - 420
 
   # Cross-company search; reaches employers we hold no slug for.
   smartrecruiters_search:
@@ -60,6 +75,51 @@ filters:
   # new, and the four-hourly sweep already has the wider net.
   max_age_days: 7
 
-  locations: []
+  # Where the channel is aimed. A posting is kept if it is in one of these
+  # places, OR if it is remote from anywhere — see allow_remote below.
+  locations:
+    - india
+    - bangalore
+    - bengaluru
+    - hyderabad
+    - pune
+    - chennai
+    - mumbai
+    - delhi
+    - new delhi
+    - noida
+    - gurgaon
+    - gurugram
+    - kolkata
+    - ahmedabad
+    - jaipur
+    - kochi
+    - coimbatore
+    - indore
+    - chandigarh
+    - thiruvananthapuram
+    - visakhapatnam
+    - nagpur
+    - mysore
+    - mysuru
+    - bhubaneswar
+    - vadodara
+    - surat
+    - lucknow
+    - goa
+
+  # Indeed and several ATSes write "Bengaluru, KA, IN" and never the word
+  # "India". Without this a third of the India inventory is dropped.
+  countries:
+    - in
+
+  # A remote role is worth surfacing wherever the employer sits, so these pass
+  # the location check regardless of country.
+  allow_remote: true
+
+  # "drop" or "keep". With a country filter on, an unreadable location — an
+  # empty string, or Workday's "2 Locations" which never says which — is far
+  # more likely to be abroad than local, so it is noise.
+  unknown_location: drop
   keywords: []
   block_companies: []

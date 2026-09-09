@@ -36,6 +36,25 @@ EXCLUDE = re.compile(
 # "5+ years", "minimum 4 years of experience" etc. in the body text.
 YEARS = re.compile(r"(\d+)\s*\+?\s*(?:-\s*\d+\s*)?year", re.I)
 
+# Remote, in the many ways a job board spells it. Checked before the location
+# list, because a remote role is worth surfacing wherever the company sits.
+REMOTE = re.compile(
+    r"\b(remote|work ?from ?home|\bwfh\b|anywhere|distributed|virtual|"
+    r"home[- ]based|telecommute)\b",
+    re.I,
+)
+
+# "Bengaluru, KA, IN" — Indeed and several ATSes put a two-letter country code
+# last. Matching that is the difference between catching those postings and
+# silently dropping a third of the India inventory, since none of them contain
+# the word "India" at all.
+COUNTRY_TAIL = re.compile(r",\s*([A-Za-z]{2})\s*$")
+
+# Workday reports a multi-site posting as "2 Locations" and never says which,
+# so there is nothing to match against — treat it as unknown, not as a miss.
+VAGUE_LOCATION = re.compile(r"^\s*\d+\s+locations?\s*$|^\s*(hybrid|multiple)\s*$", re.I)
+
+
 # Roles that count as IT/tech. The broad sources (SmartRecruiters' global
 # search, a 4,800-opening Bosch board) are not tech-specific — without this
 # the sheet fills up with forklift drivers and staff nurses. Matched against
@@ -160,6 +179,16 @@ class Filter:
         self.locations = [
             n for n in (normalise_location(x) for x in (f.get("locations") or [])) if n
         ]
+        # Two-letter country codes, matched against a trailing ", IN".
+        self.countries = {
+            str(c).strip().lower() for c in (f.get("countries") or []) if str(c).strip()
+        }
+        # A remote posting passes wherever the employer is.
+        self.allow_remote = bool(f.get("allow_remote", True))
+        # What to do when the source states no usable location. "keep" is the
+        # safe default; with a country filter on it is mostly noise, because an
+        # unreadable location is far more likely to be abroad than local.
+        self.unknown_location = str(f.get("unknown_location", "keep")).lower()
         self.max_years = int(f.get("max_years_experience", 2))
         self.keywords = [normalise(x) for x in (f.get("keywords") or [])]
         self.blocked_companies = {normalise(x) for x in (f.get("block_companies") or [])}
@@ -172,15 +201,33 @@ class Filter:
         self.max_age_days = int(f.get("max_age_days", 0) or 0)
 
     def _location_ok(self, job: Job) -> bool:
-        if not self.locations:
+        if not self.locations and not self.countries:
             return True
-        raw = normalise_location(job.location)
+
+        original = (job.location or "").strip()
+
+        # Remote first: a remote role is worth surfacing wherever it is based.
+        if self.allow_remote and REMOTE.search(original):
+            return True
+
+        if not original or VAGUE_LOCATION.match(original):
+            return self.unknown_location != "drop"
+
+        raw = normalise_location(original)
         if not raw:
-            return True  # unknown location: let it through rather than lose it
+            return self.unknown_location != "drop"
+
         # Check the raw string and the canonical city, so a config entry of
         # "bangalore" still matches a posting that says "Bengaluru, India".
-        canon = canon_location(job.location)
-        return any(want in raw or want == canon for want in self.locations)
+        canon = canon_location(original)
+        if any(want in raw or want == canon for want in self.locations):
+            return True
+
+        m = COUNTRY_TAIL.search(original)
+        if m and m.group(1).lower() in self.countries:
+            return True
+
+        return False
 
     def _experience_ok(self, job: Job) -> bool:
         matches = YEARS.findall(job.description or "")

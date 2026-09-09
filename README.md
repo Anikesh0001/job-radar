@@ -332,10 +332,17 @@ filters:
   SDE-1 titles, and reject senior / staff / lead / manager titles even if they
   also matched.
 - `max_years_experience` — drop postings whose body demands more than this.
-- `locations` — substring match against the posting location; **empty means
-  every location**. Uncomment the India block in the config to narrow to
-  Bangalore/Hyderabad/Pune/etc. Postings with no stated location always pass
-  rather than being lost.
+- `locations` / `countries` / `allow_remote` — the geography policy. As
+  shipped it is **India, plus remote from anywhere**, which on a live database
+  removed 58% of postings: San Francisco, Paris and Dublin onsite roles that
+  nobody reading this channel can take. Empty both lists to accept everywhere.
+  - `countries: [in]` matches a trailing `", IN"`. Indeed and several ATSes
+    write `Bengaluru, KA, IN` and never the word "India" — without this a third
+    of the India inventory is silently dropped.
+  - `allow_remote: true` lets a remote role through wherever the employer is.
+  - `unknown_location: drop` discards postings with no readable location,
+    including Workday's `"2 Locations"` which never says which. Set it to
+    `keep` for the old permissive behaviour.
 - `keywords`, `block_companies` — optional extra narrowing.
 
 The title patterns live in `src/filters.py` as four regexes: `IT_TITLE` and

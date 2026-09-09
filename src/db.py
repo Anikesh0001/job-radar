@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -82,6 +83,22 @@ PRUNE_AFTER_DAYS = 60
 # posted stale — otherwise the queue only ever grows and the channel would one
 # day be advertising month-old roles.
 QUEUE_MAX_AGE_DAYS = 14
+
+
+# Cities and the trailing country code, matched against a posting's location.
+# Kept here rather than imported from filters so the queue ordering does not
+# depend on how a particular run happened to be configured.
+_INDIA = re.compile(
+    r"\b(india|bangalore|bengaluru|hyderabad|pune|chennai|mumbai|delhi|noida|"
+    r"gurgaon|gurugram|kolkata|ahmedabad|jaipur|kochi|coimbatore|indore|"
+    r"chandigarh|thiruvananthapuram|trivandrum|visakhapatnam|nagpur|mysore|"
+    r"mysuru|bhubaneswar|vadodara|surat|lucknow|goa)\b|,\s*IN\s*$",
+    re.I,
+)
+
+
+def _looks_indian(location: str) -> bool:
+    return bool(_INDIA.search(location or ""))
 
 
 def _utcnow() -> str:
@@ -330,6 +347,13 @@ class Store:
         by_source: dict[str, list] = {}
         for r in rows:
             by_source.setdefault(r["source"] or "", []).append(r)
+
+        # India first within each source. The channel is aimed at India, and
+        # remote-anywhere roles are the bonus rather than the main event; doing
+        # this per source instead of globally keeps the round-robin below
+        # varied, so the feed never becomes ten Instahyre posts in a row.
+        for entries in by_source.values():
+            entries.sort(key=lambda r: 0 if _looks_indian(r["location"] or "") else 1)
 
         order = sorted(by_source, key=lambda s: -len(by_source[s]))
         picked, i = [], 0

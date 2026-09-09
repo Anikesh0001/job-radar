@@ -754,6 +754,83 @@ def test_posting_is_not_gated_on_finding_new_jobs():
     print("  posting not gated on new jobs      ok")
 
 
+INDIA_OR_REMOTE = {
+    "it_only": False, "entry_level_only": False, "max_years_experience": 99,
+    "locations": ["india", "bangalore", "bengaluru", "hyderabad", "pune",
+                  "chennai", "mumbai", "delhi", "noida", "gurgaon", "gurugram"],
+    "countries": ["in"], "allow_remote": True, "unknown_location": "drop",
+}
+
+
+def test_india_or_remote_location_policy():
+    """The channel is for India plus remote-from-anywhere. Measured against a
+    live database, 58% of postings were non-India onsite roles — San Francisco,
+    Paris, Dublin — which is what this removes."""
+    f = Filter({"filters": INDIA_OR_REMOTE})
+
+    def kept(loc):
+        return f.reason(Job(company="X", title="Software Engineer", url="u",
+                            location=loc)) is None
+
+    for loc in ("Bangalore", "Bengaluru, Karnataka, India", "Gurugram, India",
+                "India - Hyderabad", "Pune Division, Maharashtra, India"):
+        assert kept(loc), loc
+    # Indeed writes the country as a trailing code and never the word "India".
+    # Missing this dropped a third of the India inventory.
+    for loc in ("KA, IN", "TS, IN", "MH, IN", "Bengaluru, KA, IN"):
+        assert kept(loc), loc
+    # Remote passes wherever the employer sits.
+    for loc in ("Remote", "Work From Home", "Anywhere", "Remote - Berlin",
+                "Remote, US", "WFH"):
+        assert kept(loc), loc
+    # Onsite abroad does not.
+    for loc in ("San Francisco, CA", "Paris, France", "Dublin, Ireland",
+                "United States", "US, CA, Santa Clara",
+                "San Francisco, CA | New York City, NY", "Tokyo"):
+        assert not kept(loc), loc
+    # Workday says "2 Locations" and never which, so it is unknown, not a miss.
+    for loc in ("2 Locations", "3 Locations", "Hybrid", ""):
+        assert not kept(loc), loc
+
+    # unknown_location: keep restores the old permissive behaviour.
+    lenient = Filter({"filters": {**INDIA_OR_REMOTE, "unknown_location": "keep"}})
+    assert lenient.reason(Job(company="X", title="Software Engineer",
+                              url="u", location="")) is None
+
+    # allow_remote off means India only.
+    strict = Filter({"filters": {**INDIA_OR_REMOTE, "allow_remote": False}})
+    assert strict.reason(Job(company="X", title="Software Engineer", url="u",
+                             location="Remote - Berlin")) == "location mismatch"
+    print("  india + remote location policy     ok")
+
+
+def test_queue_puts_india_first_within_each_source():
+    """India leads, but per source rather than globally — sorting the whole
+    queue by country would undo the source interleaving and give ten Instahyre
+    posts in a row."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = Store(Path(tmp) / "in.db")
+        jobs = []
+        for source in ("instahyre", "jobspy-indeed"):
+            for n in range(4):
+                jobs.append(Job(company=f"{source}-abroad{n}", title=f"Engineer A{n}",
+                                url=f"https://{source}/a{n}", location="Remote - Berlin",
+                                source=source))
+            for n in range(4):
+                jobs.append(Job(company=f"{source}-india{n}", title=f"Engineer I{n}",
+                                url=f"https://{source}/i{n}", location="Bangalore",
+                                source=source))
+        store.insert_new(jobs)
+
+        picked = store.pending_jobs(4)
+        assert all("Bangalore" in (j.location or "") for j in picked), \
+            [j.location for j in picked]
+        # ...and both sources still get a turn in those first four.
+        assert len({j.source for j in picked}) == 2, [j.source for j in picked]
+        store.close()
+    print("  india first, sources still mixed   ok")
+
+
 def test_iter_targets_shape():
     """Two bugs this pins down: an empty list for a slug-taking platform used
     to yield ('workable', ''), firing a doomed request every run; and YAML
