@@ -17,7 +17,20 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+
+    # Both dependency sets, because they are genuinely different code paths and
+    # the difference has already bitten once: the jobspy adapter imported the
+    # optional package before validating its argument, so the same call
+    # returned [] on a laptop with python-jobspy installed and raised on CI
+    # without it. Whichever set the author happens to have locally, the other
+    # is the one that breaks.
+    strategy:
+      fail-fast: false
+      matrix:
+        deps: [core, with-optional]
+
+    name: tests (${{ matrix.deps }})
 
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +41,11 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          if [ "${{ matrix.deps }}" = "with-optional" ]; then
+            pip install -r requirements-optional.txt
+          fi
 
       # No network: every payload in the suite is a fixture, so this cannot go
       # red because someone else's job board is having a bad day.

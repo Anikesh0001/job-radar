@@ -1015,23 +1015,26 @@ def jobspy(client: httpx.Client, spec: str) -> list[Job]:
     Needs `pip install python-jobspy`, which pulls in pandas and numpy. It is
     deliberately not in requirements.txt so the core install stays small.
     """
-    try:
-        from jobspy import scrape_jobs
-    except ImportError:
-        raise Skipped("python-jobspy not installed (pip install python-jobspy)")
-
     parts = [p.strip() for p in spec.split("|")]
     site = (parts[0] if parts else "").lower()
     term = parts[1] if len(parts) > 1 and parts[1] else "software engineer"
     location = parts[2] if len(parts) > 2 and parts[2] else "India"
     count = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
 
+    # Reject a known-dead back-end BEFORE importing, so the answer does not
+    # depend on whether an optional dependency happens to be installed. It also
+    # avoids dragging in pandas to say no.
     if site not in JOBSPY_WORKING:
         log.warning(
             "jobspy site %r returns nothing from a plain host — "
             "known working: %s", site, ", ".join(sorted(JOBSPY_WORKING))
         )
         return []
+
+    try:
+        from jobspy import scrape_jobs
+    except ImportError:
+        raise Skipped("python-jobspy not installed (pip install python-jobspy)")
 
     def clean(value) -> str:
         # pandas hands back NaN for a missing cell, and str(NaN) is "nan".
