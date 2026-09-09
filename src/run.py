@@ -177,6 +177,11 @@ def main(argv=None) -> int:
              "catch-up",
     )
     ap.add_argument(
+        "--min-interval", type=int, default=20, metavar="MINUTES",
+        help="never post twice within this many minutes, however often the run "
+             "is triggered (default 20); 0 disables the floor",
+    )
+    ap.add_argument(
         "--notify-rate", type=int, default=DEFAULT_RATE_PER_HOUR, metavar="N",
         help=f"target postings per hour (default {DEFAULT_RATE_PER_HOUR}); each "
              f"run sends this times the hours since the last one, capped at "
@@ -347,7 +352,17 @@ def main(argv=None) -> int:
             gap = None
         else:
             gap = store.hours_since_last_post()
-            quota = catchup_quota(gap, args.notify_rate)
+            # Once external schedulers are triggering this as well as GitHub's
+            # own cron, runs can arrive minutes apart — a queued trigger, a
+            # manual click, two services firing at once. Without a floor the
+            # channel gets a trickle of two-message bursts instead of a feed.
+            if gap * 60 < args.min_interval:
+                log.info("only %.0f minutes since the last post (floor is %d); "
+                         "fetched and stored, posting nothing", gap * 60,
+                         args.min_interval)
+                quota = 0
+            else:
+                quota = catchup_quota(gap, args.notify_rate)
 
         queue = store.pending_jobs(quota)
         outstanding = store.pending_count()

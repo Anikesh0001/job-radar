@@ -99,6 +99,14 @@ moment it sends, so an interrupted run never re-posts.
 
 ### Running it unattended
 
+**Keeping it regular: [AUTOMATION.md](AUTOMATION.md).** GitHub's cron skipped
+about half the slots on this repo, so each run catches up for however long it
+has actually been, and free external schedulers (cron-job.org, GitLab CI) can
+trigger the workflow as extra alarm clocks. They *trigger* rather than run —
+two independent runners would each keep their own database and post everything
+twice.
+
+
 **Full walkthrough: [GITHUB.md](GITHUB.md).** Push to a public repo, add two
 secrets, and GitHub Actions runs it every four hours for free — no VPS, nothing
 on your laptop.

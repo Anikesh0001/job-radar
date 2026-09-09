@@ -1041,6 +1041,35 @@ def test_run_history_is_recorded():
     print("  run history recorded               ok")
 
 
+def test_minimum_interval_floor():
+    """Once several schedulers point at the same workflow — GitHub's own cron
+    plus cron-job.org plus GitLab — runs arrive minutes apart. Without a floor
+    the channel gets a trickle of two-message bursts instead of a feed.
+
+    The floor blocks the posting, not the run: fetching and storing still
+    happen, so nothing is lost by triggering often.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        store = Store(Path(tmp) / "f.db")
+
+        def gap_after(minutes):
+            store.set_meta(
+                "last_post_at",
+                (datetime.now(UTC) - timedelta(minutes=minutes)).isoformat(),
+            )
+            return store.hours_since_last_post()
+
+        floor = 20
+        for minutes in (1, 5, 19):
+            assert gap_after(minutes) * 60 < floor, minutes      # blocked
+        for minutes in (21, 60, 300):
+            gap = gap_after(minutes)
+            assert gap * 60 >= floor, minutes                    # allowed
+            assert catchup_quota(gap, 15) >= 1
+        store.close()
+    print("  minimum interval floor             ok")
+
+
 def test_iter_targets_shape():
     """Two bugs this pins down: an empty list for a slug-taking platform used
     to yield ('workable', ''), firing a doomed request every run; and YAML

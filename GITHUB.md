@@ -218,6 +218,11 @@ over a few runs instead of dumping 180 messages at once.
 `--notify-rate N` changes the target; `--notify-limit N` overrides it with a
 flat number.
 
+To fire the workflow more reliably than GitHub's own scheduler manages, add a
+free external one — see **[AUTOMATION.md](AUTOMATION.md)**. They trigger this
+workflow rather than running the pipeline, so no matter how many you add there
+is still one database and no chance of double-posting.
+
 Nothing runs on your machine. Your laptop can be off, asleep, or in another
 country — this all executes on GitHub's runners.
 
