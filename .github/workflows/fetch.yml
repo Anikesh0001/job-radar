@@ -93,6 +93,32 @@ jobs:
               --latest=false
           gh release upload "$STATE_TAG" jobs.db.gz jobs.xlsx --clobber
 
+      # An unattended feed that breaks is indistinguishable from an unattended
+      # feed with nothing to say. GitHub emails on the first failure of a
+      # scheduled workflow and then stays quiet, so tell the channel owner
+      # directly, through the bot that is already configured.
+      - name: Report failure to Telegram
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          # Prefer a private alert chat if one is configured, so operational
+          # noise never lands in the public job channel.
+          CHAT="${TELEGRAM_ALERT_CHAT_ID:-}"
+          if [ -z "$CHAT" ]; then
+            echo "no TELEGRAM_ALERT_CHAT_ID set — skipping the alert so this"
+            echo "does not post an error message into the public channel"
+            exit 0
+          fi
+          RUN="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -s -o /dev/null -X POST \
+            "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+            --data-urlencode "chat_id=$CHAT" \
+            --data-urlencode "text=job-radar: ${{ github.workflow }} failed on $(date -u +'%Y-%m-%d %H:%M UTC').%0A$RUN" \
+            --data-urlencode "disable_web_page_preview=true"
+
   # GitHub disables scheduled workflows in a public repo after 60 days with no
   # repository activity, and neither release uploads nor commits made by the
   # built-in GITHUB_TOKEN reset that timer. A feed that runs perfectly would

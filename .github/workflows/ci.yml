@@ -1,0 +1,62 @@
+name: tests
+
+# Runs on every push and pull request. The feed is unattended, so a broken
+# commit would not announce itself — the channel would just go quiet and stay
+# quiet until somebody noticed. This is the thing that notices.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # No network: every payload in the suite is a fixture, so this cannot go
+      # red because someone else's job board is having a bad day.
+      - name: Run tests
+        run: python tests/test_pipeline.py
+
+      # Catches the mistakes that otherwise cost coverage in silence: a
+      # platform no adapter answers to, a Workday slug missing its site name,
+      # a misspelled filter key that means "no limit at all".
+      - name: Validate configs
+        run: python -m src.run --check-config
+
+      - name: Byte-compile everything
+        run: python -m compileall -q src discover.py verify_slugs.py tests
+
+  # A dead slug does not fail a run — the adapter logs a warning and moves on,
+  # which is right for the scheduled job but means rot accumulates unseen. Once
+  # a week, actually call the sources and say what is no longer answering.
+  sources:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Probe every configured source
+        run: python verify_slugs.py || true

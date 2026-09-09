@@ -1,0 +1,23 @@
+# Free, and the only maintenance this project would otherwise need. httpx and
+# rapidfuzz are pinned exactly (see requirements.txt) so a bad upstream release
+# cannot break an unattended feed — the cost of pinning is that nothing ever
+# updates, which Dependabot fixes by opening a PR that CI then has to pass.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps"
+
+  # Actions get pinned to major versions (@v4), which still drifts. This keeps
+  # them current without anyone watching release notes.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"

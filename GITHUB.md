@@ -75,7 +75,16 @@ Those are gitignored on purpose (see Step 7).
 | `TELEGRAM_BOT_TOKEN` | from BotFather | **yes** |
 | `TELEGRAM_CHAT_ID` | `@yourchannel` or `-100...` | **yes** |
 | `GH_PAT` | see Step 5 | strongly recommended |
+| `TELEGRAM_ALERT_CHAT_ID` | where to report failures — see below | recommended |
 | `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` | free key from [developer.adzuna.com](https://developer.adzuna.com/) | optional |
+
+**About `TELEGRAM_ALERT_CHAT_ID`:** an unattended feed that breaks looks exactly
+like an unattended feed with nothing to say. GitHub emails you on the *first*
+failure of a scheduled workflow and then goes quiet, so the workflows also
+report failures over Telegram. Point this at a **private** chat — message
+[@userinfobot](https://t.me/userinfobot) to get your own numeric id — so
+operational noise never lands in the public job channel. Leave it unset and the
+alert step skips itself rather than posting errors to your subscribers.
 
 Secrets are write-only. GitHub will never show them again, and they are masked
 in logs.
@@ -185,6 +194,30 @@ other rather than clobbering the same database.
 | Weekly | One keepalive commit, so the schedule is never auto-disabled |
 | Yearly | **You** renew `GH_PAT` |
 
+### Why each run posts a different number
+
+GitHub's scheduler is best-effort, and on a low-activity public repo it is
+worse than that: measured over five hours against an hourly cron it ran **3 of
+6 slots**, with gaps of 2.6 to 5 hours. Nothing is misconfigured — this is
+simply what free scheduled Actions do, and it cannot be fixed from inside the
+repo.
+
+So the batch size is not fixed. Each run checks how long it has actually been
+since the last delivery and sends `rate × hours`, capped at 60:
+
+```
+1.0h since last post  → 15 postings
+2.6h                  → 39
+5.0h                  → 60 (capped)
+```
+
+The daily volume therefore stays near the target of ~15/hour whether GitHub
+fires six times or twenty. The cap exists so a twelve-hour outage catches up
+over a few runs instead of dumping 180 messages at once.
+
+`--notify-rate N` changes the target; `--notify-limit N` overrides it with a
+flat number.
+
 Nothing runs on your machine. Your laptop can be off, asleep, or in another
 country — this all executes on GitHub's runners.
 
@@ -251,7 +284,13 @@ run: python -m src.run --export jobs.xlsx --notify-limit 25
 
 You will not need to look at this often, but when you do:
 
-**Is it running?** Actions tab. Green ticks every four hours.
+**Is it running?** The badges at the top of the README, or the Actions tab.
+Every run also writes a per-source table to its GitHub summary page, so you can
+see what each source contributed without opening a log.
+
+**Is it broken?** You get a Telegram message, if `TELEGRAM_ALERT_CHAT_ID` is
+set. Every push also runs the test suite and validates both configs, so a
+change that would break the feed fails before it ships rather than after.
 
 **Get told when it breaks:** GitHub emails you on the first failure of a
 scheduled workflow by default. Confirm at

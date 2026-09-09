@@ -173,7 +173,7 @@ sources:
     - upstox
     - whatfix
     - wise
-  workable: []
+  # workable: []      # add entries here to switch this source on
   recruitee:
     - accenture
     - navi
@@ -191,8 +191,8 @@ sources:
     - zepto
   breezy:
     - census
-  teamtailor: []
-  personio: []
+  # teamtailor: []      # add entries here to switch this source on
+  # personio: []      # add entries here to switch this source on
   rippling:
     - bonusly
     - freshworks
@@ -296,11 +296,11 @@ sources:
   # Any careers page carrying schema.org JobPosting markup. Add the LISTING
   # page, not a single job — and note most listing pages are JS shells with no
   # markup, in which case use `sitemap` instead.
-  jsonld: []
+  # jsonld: []      # add entries here to switch this source on
 
   # Bounded sitemap crawl for companies with no public board at all. Slow and
   # low-yield; reach for it last. '<url>' or '<url>|<max_pages>'.
-  sitemap: []
+  # sitemap: []      # add entries here to switch this source on
 
 
 filters:

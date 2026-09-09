@@ -33,6 +33,14 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_first_seen ON jobs(first_seen);
 CREATE INDEX IF NOT EXISTS idx_dedupe ON jobs(company, title);
 
+-- Small key/value store for state that is not a posting: when we last
+-- delivered to Telegram, mainly. Kept in the database so it travels with the
+-- state release and survives a runner being torn down.
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
 -- Per-target outcome of every run. Without this a source that quietly starts
 -- returning zero — a migrated ATS, a renamed slug — looks identical to a
 -- source with genuinely nothing new, and stays broken for weeks.
@@ -390,6 +398,44 @@ class Store:
         self.conn.execute("UPDATE jobs SET notified = 0")
         self.conn.commit()
         return n
+
+    # -- key/value state ----------------------------------------------------
+
+    def get_meta(self, key: str, default: str | None = None) -> str | None:
+        row = self.conn.execute(
+            "SELECT value FROM meta WHERE key = ?", (key,)
+        ).fetchone()
+        return row["value"] if row else default
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        self.conn.commit()
+
+    def hours_since_last_post(self, default: float = 1.0) -> float:
+        """How long since anything was delivered, in hours.
+
+        Drives the catch-up quota. GitHub skips roughly half of all scheduled
+        slots on a low-activity public repo — measured at 53%, with gaps of
+        2.6 to 5 hours against an hourly cron — so a fixed batch per run makes
+        the channel's output depend on GitHub's mood. Sizing each batch by
+        elapsed time instead keeps the daily rate steady however erratic the
+        runs are.
+        """
+        stamp = self.get_meta("last_post_at")
+        if not stamp:
+            return default
+        try:
+            last = datetime.fromisoformat(stamp)
+        except ValueError:
+            return default
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        hours = (datetime.now(timezone.utc) - last).total_seconds() / 3600
+        return max(hours, 0.0)
 
     def expire_queue(self, days: int = QUEUE_MAX_AGE_DAYS) -> int:
         """Silently drop queued postings older than `days`.

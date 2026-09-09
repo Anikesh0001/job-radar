@@ -19,12 +19,13 @@ import httpx
 
 from src import sources
 from src.db import Store
+from src.validate import check_config
 from src.export import export, write_csv, write_txt
 from src.filters import Filter
 from src.models import (Job, canon_location, normalise, normalise_company,
                         parse_date)
 from src import notify
-from src.notify import _fmt
+from src.notify import _fmt, catchup_quota
 
 GREENHOUSE = {
     "jobs": [
@@ -829,6 +830,90 @@ def test_queue_puts_india_first_within_each_source():
         assert len({j.source for j in picked}) == 2, [j.source for j in picked]
         store.close()
     print("  india first, sources still mixed   ok")
+
+
+def test_catchup_quota_tracks_elapsed_time():
+    """GitHub skips about half of all scheduled slots on a repo like this —
+    measured at 53%, with gaps of 2.6 to 5 hours against an hourly cron. A
+    fixed batch per run therefore makes the channel's output depend on
+    GitHub's mood; sizing it by elapsed time keeps the daily rate steady."""
+    assert catchup_quota(1.0, rate=15) == 15
+    assert catchup_quota(2.0, rate=15) == 30
+    assert catchup_quota(2.6, rate=15) == 39
+    # Capped, or a twelve-hour outage dumps 180 messages and reads as a flood.
+    assert catchup_quota(12.0, rate=15, cap=60) == 60
+    assert catchup_quota(99.0, rate=15, cap=60) == 60
+    # A run moments after the last one still sends something rather than zero.
+    assert catchup_quota(0.0, rate=15) == 15
+    assert catchup_quota(0.01, rate=15) >= 1
+    print("  catch-up quota by elapsed time     ok")
+
+
+def test_last_post_time_round_trips():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "m.db"
+        store = Store(path)
+        assert store.hours_since_last_post(default=7.0) == 7.0   # never posted
+        earlier = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+        store.set_meta("last_post_at", earlier)
+        store.close()
+
+        store = Store(path)                       # survives a restart
+        assert 2.9 < store.hours_since_last_post() < 3.1
+        store.set_meta("last_post_at", "not a timestamp")
+        assert store.hours_since_last_post(default=1.0) == 1.0   # junk is ignored
+        store.close()
+    print("  last-post time survives restart    ok")
+
+
+def test_config_validation_catches_typos():
+    """Every mistake here is one that otherwise costs coverage in silence: an
+    adapter name nothing answers to is skipped, and a misspelled filter key is
+    ignored — `max_age_day` quietly means 'no age limit at all'."""
+    with tempfile.TemporaryDirectory() as tmp:
+        bad = Path(tmp) / "bad.yaml"
+        bad.write_text(
+            "sources:\n"
+            "  greenhous: [stripe]\n"
+            "  workday: ['nvidia|SiteOnly', 'acme|wd5|C', 'acme|wd5|C']\n"
+            "  rss: [weworkremotely.com/feed]\n"
+            "  jobspy: ['naukri|dev|India|10']\n"
+            "  oraclecloud: [not-a-host]\n"
+            "filters:\n"
+            "  max_age_day: 30\n"
+            "  unknown_location: maybe\n",
+            encoding="utf-8",
+        )
+        problems = " | ".join(check_config(str(bad)))
+        for expected in ("greenhous", "did you mean greenhouse",
+                         "tenant|wdN|SiteName", "listed twice",
+                         "full http(s) URL", "naukri", "oraclecloud",
+                         "max_age_day", "did you mean max_age_days",
+                         "keep' or 'drop"):
+            assert expected in problems, (expected, problems)
+
+        good = Path(tmp) / "good.yaml"
+        good.write_text(
+            "sources:\n"
+            "  greenhouse: [stripe]\n"
+            "  workday: ['nvidia|wd5|NVIDIAExternalCareerSite']\n"
+            "  remoteok:\n"
+            "filters:\n"
+            "  it_only: true\n"
+            "  max_age_days: 30\n"
+            "  unknown_location: drop\n",
+            encoding="utf-8",
+        )
+        assert check_config(str(good)) == [], check_config(str(good))
+    print("  config validation catches typos    ok")
+
+
+def test_shipped_configs_are_valid():
+    """The configs that actually run must pass their own validator."""
+    for path in ("config/sources.yaml", "config/fast.yaml"):
+        if Path(path).exists():
+            assert check_config(path) == [], (path, check_config(path))
+    print("  shipped configs validate           ok")
 
 
 def test_iter_targets_shape():

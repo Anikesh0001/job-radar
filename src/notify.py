@@ -45,6 +45,22 @@ SECONDS_BETWEEN_MESSAGES = 3.5
 # 40 messages is a shade over two minutes.
 DEFAULT_PER_RUN = 40
 
+# Target delivery rate, in postings per hour. The batch for a run is this
+# multiplied by the hours since the last delivery, so the channel keeps a
+# steady pace even though GitHub skips about half of all scheduled slots.
+DEFAULT_RATE_PER_HOUR = 15
+
+# Ceiling on one catch-up batch. Without it, a twelve-hour outage would try to
+# dump 180 messages at once: eight minutes of solid posting, and a channel that
+# reads as a flood rather than a feed.
+MAX_CATCHUP = 60
+
+
+def catchup_quota(hours: float, rate: int = DEFAULT_RATE_PER_HOUR,
+                  cap: int = MAX_CATCHUP) -> int:
+    """How many postings this run should send, given the gap since the last."""
+    return max(1, min(cap, round(rate * max(hours, 0.0)) or rate))
+
 
 def _fmt(job: Job) -> str:
     """One posting, one message. HTML parse mode."""

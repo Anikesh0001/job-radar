@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import random
 import sys
 import time
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -16,7 +18,8 @@ from .db import PRUNE_AFTER_DAYS, QUEUE_MAX_AGE_DAYS, Store
 from .export import export
 from .filters import Filter
 from .models import Job
-from .notify import (DEFAULT_PER_RUN, SECONDS_BETWEEN_MESSAGES, send_discord,
+from .notify import (DEFAULT_RATE_PER_HOUR, MAX_CATCHUP,
+                     SECONDS_BETWEEN_MESSAGES, catchup_quota, send_discord,
                      send_telegram, write_markdown)
 from .sources import Skipped, fetch_one, iter_targets
 
@@ -101,6 +104,24 @@ def summarise(raw: list[Job], relevant: list[Job], health: list[tuple]) -> None:
         log.info("%d target(s) returned nothing this run "
                  "(run --health for the persistent ones)", len(dead))
 
+    # GitHub renders this on the run's summary page, so the state of the feed
+    # is legible without opening a log and scrolling.
+    summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        lines = [
+            f"## {len(relevant)} postings kept of {len(raw)} fetched", "",
+            "| source | fetched | kept |", "|---|---:|---:|",
+        ]
+        lines += [f"| {src} | {fetched[src]} | {kept.get(src, 0)} |"
+                  for src in sorted(fetched, key=lambda k: -fetched[k])]
+        lines += ["", f"{len(health) - len(dead)} of {len(health)} targets "
+                      f"returned something."]
+        try:
+            with open(summary_path, "a", encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + "\n")
+        except OSError as e:  # noqa: BLE001 - a summary is never worth failing a run
+            log.debug("could not write step summary: %s", e)
+
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="job-radar")
@@ -146,9 +167,15 @@ def main(argv=None) -> int:
              "0 disables pruning",
     )
     ap.add_argument(
-        "--notify-limit", type=int, default=DEFAULT_PER_RUN, metavar="N",
-        help=f"max Telegram messages per run (default {DEFAULT_PER_RUN}); "
-             "the rest stay queued for the next run",
+        "--notify-limit", type=int, default=None, metavar="N",
+        help="send exactly N messages this run, overriding the rate-based "
+             "catch-up",
+    )
+    ap.add_argument(
+        "--notify-rate", type=int, default=DEFAULT_RATE_PER_HOUR, metavar="N",
+        help=f"target postings per hour (default {DEFAULT_RATE_PER_HOUR}); each "
+             f"run sends this times the hours since the last one, capped at "
+             f"{MAX_CATCHUP}",
     )
     ap.add_argument(
         "--mark-all-notified", action="store_true",
@@ -162,6 +189,10 @@ def main(argv=None) -> int:
              "drips out at --notify-limit per run alongside new finds",
     )
     ap.add_argument(
+        "--check-config", action="store_true",
+        help="validate the config files and exit; use this in CI",
+    )
+    ap.add_argument(
         "--health",
         action="store_true",
         help="print sources that have returned nothing for several runs, then exit",
@@ -171,6 +202,12 @@ def main(argv=None) -> int:
         help="how many consecutive empty runs counts as broken (--health)",
     )
     args = ap.parse_args(argv)
+
+    if args.check_config:
+        from .validate import report
+        extra = [p for p in ("config/sources.yaml", "config/fast.yaml")
+                 if p != args.config and Path(p).exists()]
+        return report([args.config, *extra])
 
     if args.mark_all_notified:
         with Store(args.db) as store:
@@ -268,13 +305,31 @@ def main(argv=None) -> int:
         # Deliberately NOT gated on `new`: a run that finds nothing still has a
         # backlog to work through, and the earlier version returned before this
         # point, so the channel went silent whenever a fetch added nothing.
-        queue = store.pending_jobs(args.notify_limit)
+        # Size the batch by how long it has actually been, not by how long the
+        # cron says it should have been. GitHub skips about half of all
+        # scheduled slots on a repo like this, so a fixed batch makes the
+        # channel's output depend on GitHub's mood rather than on a rate we
+        # chose. --notify-limit overrides this with a flat number.
+        if args.notify_limit is not None:
+            quota = args.notify_limit
+            gap = None
+        else:
+            gap = store.hours_since_last_post()
+            quota = catchup_quota(gap, args.notify_rate)
+
+        queue = store.pending_jobs(quota)
         outstanding = store.pending_count()
         if queue:
-            log.info("telegram: posting %d of %d queued (one message each, "
-                     "~%.1fs apart)", len(queue), outstanding,
-                     SECONDS_BETWEEN_MESSAGES)
-            send_telegram(queue, on_sent=lambda j: store.mark_notified([j]))
+            if gap is None:
+                log.info("telegram: posting %d of %d queued", len(queue), outstanding)
+            else:
+                log.info("telegram: %.1fh since the last post, so sending %d of "
+                         "%d queued (target %d/hour)",
+                         gap, len(queue), outstanding, args.notify_rate)
+            sent = send_telegram(queue, on_sent=lambda j: store.mark_notified([j]))
+            if sent:
+                store.set_meta("last_post_at",
+                               datetime.now(timezone.utc).isoformat(timespec="seconds"))
             left = store.pending_count()
             if left:
                 log.info("telegram: %d still queued, will go out next run", left)

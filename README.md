@@ -1,5 +1,9 @@
 # job-radar
 
+[![tests](https://github.com/Anikesh0001/job-radar/actions/workflows/ci.yml/badge.svg)](https://github.com/Anikesh0001/job-radar/actions/workflows/ci.yml)
+[![fetch jobs](https://github.com/Anikesh0001/job-radar/actions/workflows/fetch.yml/badge.svg)](https://github.com/Anikesh0001/job-radar/actions/workflows/fetch.yml)
+[![hourly jobs](https://github.com/Anikesh0001/job-radar/actions/workflows/post.yml/badge.svg)](https://github.com/Anikesh0001/job-radar/actions/workflows/post.yml)
+
 Automated IT job alerts, built entirely on free infrastructure. Polls ~200
 public ATS boards, aggregator feeds and search APIs on a schedule,
 deduplicates across all of them, filters to tech roles, and pushes new
