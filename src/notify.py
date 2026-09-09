@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import html
 import logging
-import re
 import os
+import re
 import time
 
 import httpx
@@ -69,6 +69,8 @@ def _fmt(job: Job) -> str:
     lines = [f"<b>{title}</b>", f"🏢 {company}"]
     if job.location:
         lines.append(f"📍 {html.escape(job.location[:100])}")
+    if job.salary:
+        lines.append(f"💰 {html.escape(job.salary[:60])}")
     if job.posted_at:
         lines.append(f"🗓 {html.escape(str(job.posted_at)[:10])}")
     lines.append(f"🔗 <a href=\"{html.escape(job.url)}\">Apply</a>")
@@ -164,13 +166,19 @@ def send_telegram(
     return sent
 
 
+# Discord batches, unlike Telegram: it has no per-message rate limit worth
+# working around, and a wall of one-line entries reads better there than 40
+# separate posts would.
+DISCORD_BATCH = 8
+
+
 def send_discord(jobs: list[Job], webhook: str | None = None) -> bool:
     webhook = webhook or os.getenv("DISCORD_WEBHOOK_URL")
     if not webhook or not jobs:
         return False
     with httpx.Client(timeout=30) as client:
-        for i in range(0, len(jobs), BATCH):
-            chunk = jobs[i : i + BATCH]
+        for i in range(0, len(jobs), DISCORD_BATCH):
+            chunk = jobs[i : i + DISCORD_BATCH]
             lines = [f"**{j.company}** — [{j.title}]({j.url})" for j in chunk]
             r = client.post(webhook, json={"content": "\n".join(lines)[:1900]})
             if r.status_code >= 300:

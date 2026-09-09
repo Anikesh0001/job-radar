@@ -1,0 +1,24 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = [".venv", "__pycache__"]
+
+[tool.ruff.lint]
+# Beyond the defaults: bugbear catches real mistakes (mutable defaults, loop
+# variable capture), pyupgrade keeps syntax current, and the comprehension and
+# simplify rules keep the source readable for someone reading it to learn from.
+select = ["E", "F", "W", "B", "UP", "C4", "SIM", "I", "RUF"]
+ignore = [
+    "E501",    # line length is handled by the formatter, not worth failing on
+    "SIM108",  # ternaries are not always clearer than an if/else
+    "B008",    # argparse and dataclass defaults trip this constantly
+    "RUF001",  # en dashes are deliberate: they appear in salary ranges
+    "RUF003",  # ...and in the prose of comments
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests deliberately poke at private helpers and monkeypatch imports.
+"tests/*" = ["E402", "F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]

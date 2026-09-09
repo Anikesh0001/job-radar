@@ -8,8 +8,8 @@ import os
 import random
 import sys
 import time
-from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -18,9 +18,14 @@ from .db import PRUNE_AFTER_DAYS, QUEUE_MAX_AGE_DAYS, Store
 from .export import export
 from .filters import Filter
 from .models import Job
-from .notify import (DEFAULT_RATE_PER_HOUR, MAX_CATCHUP,
-                     SECONDS_BETWEEN_MESSAGES, catchup_quota, send_discord,
-                     send_telegram, write_markdown)
+from .notify import (
+    DEFAULT_RATE_PER_HOUR,
+    MAX_CATCHUP,
+    catchup_quota,
+    send_discord,
+    send_telegram,
+    write_markdown,
+)
 from .sources import Skipped, fetch_one, iter_targets
 
 logging.basicConfig(
@@ -72,7 +77,7 @@ def fetch_all(config: dict, workers: int = 6) -> tuple[list[Job], list[tuple]]:
                 # Deliberate, not a failure — record the reason so --health can
                 # say "needs a key" instead of implying the source is broken.
                 health.append((platform, slug, 0, f"skipped: {e}"))
-            except Exception as e:  # noqa: BLE001 - fetch_one swallows, this is belt-and-braces
+            except Exception as e:
                 log.warning("%s/%s crashed: %s", platform, slug, e)
                 health.append((platform, slug, 0, f"{type(e).__name__}: {e}"))
             done += 1
@@ -119,7 +124,7 @@ def summarise(raw: list[Job], relevant: list[Job], health: list[tuple]) -> None:
         try:
             with open(summary_path, "a", encoding="utf-8") as fh:
                 fh.write("\n".join(lines) + "\n")
-        except OSError as e:  # noqa: BLE001 - a summary is never worth failing a run
+        except OSError as e:
             log.debug("could not write step summary: %s", e)
 
 
@@ -189,6 +194,10 @@ def main(argv=None) -> int:
              "drips out at --notify-limit per run alongside new finds",
     )
     ap.add_argument(
+        "--stats", action="store_true",
+        help="show recent run history and exit",
+    )
+    ap.add_argument(
         "--check-config", action="store_true",
         help="validate the config files and exit; use this in CI",
     )
@@ -202,6 +211,23 @@ def main(argv=None) -> int:
         help="how many consecutive empty runs counts as broken (--health)",
     )
     args = ap.parse_args(argv)
+
+    if args.stats:
+        with Store(args.db) as store:
+            rows = store.recent_runs(20)
+            if not rows:
+                print("no runs recorded yet")
+                return 0
+            print(f"  {'when':<20}{'mode':<11}{'fetched':>8}{'kept':>7}"
+                  f"{'new':>6}{'sent':>6}{'queued':>8}{'dead':>6}{'secs':>7}")
+            for r in rows:
+                print(f"  {r['started_at'][:19].replace('T', ' '):<20}"
+                      f"{r['mode']:<11}{r['fetched']:>8}{r['kept']:>7}"
+                      f"{r['added']:>6}{r['posted']:>6}{r['queued']:>8}"
+                      f"{r['dead']:>6}{r['seconds']:>7.0f}")
+            total = sum(r["posted"] for r in rows)
+            print(f"\n  {len(rows)} run(s), {total} posting(s) delivered")
+        return 0
 
     if args.check_config:
         from .validate import report
@@ -252,6 +278,10 @@ def main(argv=None) -> int:
         log.error("config not found: %s", args.config)
         return 1
 
+    started = datetime.now(UTC)
+    stats = {"fetched": 0, "kept": 0, "dead": 0}
+    sent_jobs: list[Job] = []
+
     store = Store(args.db)
     try:
         # --post-only skips the fetch entirely and just drains the queue. That
@@ -270,6 +300,8 @@ def main(argv=None) -> int:
                 relevant = Filter(config).apply(raw)
             log.info("%d postings passed filters", len(relevant))
             summarise(raw, relevant, health)
+            stats.update(fetched=len(raw), kept=len(relevant),
+                         dead=sum(1 for _, _, n, _ in health if n == 0))
 
             store.record_health(health)
             new = store.insert_new(relevant)
@@ -327,9 +359,10 @@ def main(argv=None) -> int:
                          "%d queued (target %d/hour)",
                          gap, len(queue), outstanding, args.notify_rate)
             sent = send_telegram(queue, on_sent=lambda j: store.mark_notified([j]))
+            sent_jobs = sent
             if sent:
                 store.set_meta("last_post_at",
-                               datetime.now(timezone.utc).isoformat(timespec="seconds"))
+                               datetime.now(UTC).isoformat(timespec="seconds"))
             left = store.pending_count()
             if left:
                 log.info("telegram: %d still queued, will go out next run", left)
@@ -339,6 +372,15 @@ def main(argv=None) -> int:
         if new:
             write_markdown(new)
             send_discord(new)
+
+        store.record_run(
+            started_at=started.isoformat(timespec="seconds"),
+            mode="post-only" if args.post_only else "fetch",
+            fetched=stats["fetched"], kept=stats["kept"], added=len(new),
+            posted=len(sent_jobs), queued=store.pending_count(),
+            dead=stats["dead"],
+            seconds=round((datetime.now(UTC) - started).total_seconds(), 1),
+        )
     finally:
         store.close()
 

@@ -111,7 +111,7 @@ def probe(company: str, platform: str, slug: str) -> tuple:
     try:
         with httpx.Client(timeout=TIMEOUT, headers=HEADERS, follow_redirects=True) as c:
             n = PROBES[platform](c, slug)
-    except Exception:  # noqa: BLE001 - a probe failing is a "no", not an error
+    except Exception:
         n = None
     return company, platform, slug, n
 

@@ -7,7 +7,7 @@ an exclude pattern ("Senior Manager, University Recruiting" is not a grad job).
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .models import Job, canon_location, normalise, normalise_location
 
@@ -224,10 +224,7 @@ class Filter:
             return True
 
         m = COUNTRY_TAIL.search(original)
-        if m and m.group(1).lower() in self.countries:
-            return True
-
-        return False
+        return bool(m and m.group(1).lower() in self.countries)
 
     def _experience_ok(self, job: Job) -> bool:
         matches = YEARS.findall(job.description or "")
@@ -250,8 +247,8 @@ class Filter:
         except ValueError:
             return True
         if posted.tzinfo is None:
-            posted = posted.replace(tzinfo=timezone.utc)
-        age = (datetime.now(timezone.utc) - posted).days
+            posted = posted.replace(tzinfo=UTC)
+        age = (datetime.now(UTC) - posted).days
         # A posting dated in the future is a source with a broken clock, not a
         # job that has not happened yet. Keep it rather than lose it.
         return age <= self.max_age_days
@@ -267,6 +264,11 @@ class Filter:
 
     def reason(self, job: Job) -> str | None:
         """Return None if the job passes, else a short rejection reason."""
+        # Indeed hides the employer on some listings. "Full Stack Engineer at
+        # (blank)" is not a posting anyone can act on, so it is not worth a
+        # message.
+        if not (job.company or "").strip():
+            return "no company name"
         if normalise(job.company) in self.blocked_companies:
             return "blocked company"
         if self.it_only and not self._it_ok(job):

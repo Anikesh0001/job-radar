@@ -49,6 +49,15 @@ jobs:
 
       # No network: every payload in the suite is a fixture, so this cannot go
       # red because someone else's job board is having a bad day.
+      # Lint before the tests: ruff has already caught a genuine bug here — a
+      # NameError in send_discord left behind when the Telegram sender was
+      # rewritten, on a path the tests never exercised.
+      - name: Lint
+        if: matrix.deps == 'core'
+        run: |
+          pip install ruff==0.16.6
+          ruff check .
+
       - name: Run tests
         run: python tests/test_pipeline.py
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import csv
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .models import Job
@@ -22,6 +22,7 @@ COLUMNS = [
     ("Company", lambda j: j.company),
     ("Title", lambda j: j.title),
     ("Location", lambda j: j.location or ""),
+    ("Salary", lambda j: j.salary or ""),
     ("Apply Link", lambda j: j.url),
     ("Source", lambda j: j.source),
     ("Posted", lambda j: (j.posted_at or "")[:10]),
@@ -89,8 +90,8 @@ def write_xlsx(jobs: list[Job], path: str | Path) -> Path:
             cell.value = "Apply"
             cell.font = Font(color="0563C1", underline="single")
 
-    widths = {"Company": 22, "Title": 60, "Location": 34, "Apply Link": 46,
-              "Source": 16, "Posted": 12, "First Seen": 20}
+    widths = {"Company": 22, "Title": 60, "Location": 34, "Salary": 20,
+              "Apply Link": 46, "Source": 16, "Posted": 12, "First Seen": 20}
     for i, name in enumerate(headers, start=1):
         ws.column_dimensions[get_column_letter(i)].width = widths.get(name, 18)
 
@@ -103,7 +104,7 @@ def write_xlsx(jobs: list[Job], path: str | Path) -> Path:
 def write_txt(jobs: list[Job], path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     lines = [f"job-radar — {len(jobs)} opening(s) — {stamp}", "=" * 72, ""]
     for n, j in enumerate(jobs, 1):
         lines.append(f"{n}. {j.title}")

@@ -10,22 +10,28 @@ import json
 import sys
 import tempfile
 import types
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import httpx
 
-from src import sources
+from src import notify, sources
 from src.db import Store
-from src.validate import check_config
 from src.export import export, write_csv, write_txt
 from src.filters import Filter
-from src.models import (Job, canon_location, normalise, normalise_company,
-                        parse_date)
-from src import notify
+from src.models import (
+    Job,
+    canon_location,
+    display_company,
+    normalise,
+    normalise_company,
+    parse_date,
+)
 from src.notify import _fmt, catchup_quota
+from src.sources import _money
+from src.validate import check_config
 
 GREENHOUSE = {
     "jobs": [
@@ -258,15 +264,26 @@ def test_export_writes_apply_link_in_every_format():
 def test_export_xlsx_hyperlinks_or_falls_back():
     """openpyxl is optional: with it we get a real hyperlink, without it we get
     a .csv beside the requested path instead of a crash after a long fetch."""
-    jobs = [Job(company="Acme", title="Intern", url="https://example.com/apply/1")]
+    jobs = [Job(company="Acme", title="Intern", url="https://example.com/apply/1",
+                salary="₹12L – 18L/yr")]
     with tempfile.TemporaryDirectory() as tmp:
         out = export(jobs, Path(tmp) / "jobs.xlsx")
         if out.suffix == ".xlsx":
             from openpyxl import load_workbook
 
             ws = load_workbook(out).active
-            assert [c.value for c in ws[1]][:4] == ["Company", "Title", "Location", "Apply Link"]
-            assert ws.cell(row=2, column=4).hyperlink.target == "https://example.com/apply/1"
+            headers = [c.value for c in ws[1]]
+            # Look the column up rather than asserting its index: this test
+            # broke when Salary was inserted before Apply Link, which is a
+            # change to the sheet, not a bug in the export.
+            for expected in ("Company", "Title", "Location", "Salary",
+                             "Apply Link", "Source", "Posted"):
+                assert expected in headers, (expected, headers)
+            link_col = headers.index("Apply Link") + 1
+            assert ws.cell(row=2, column=link_col).hyperlink.target == \
+                "https://example.com/apply/1"
+            assert ws.cell(row=2, column=headers.index("Salary") + 1).value == \
+                "₹12L – 18L/yr"
         else:
             assert out.suffix == ".csv"
             assert "https://example.com/apply/1" in out.read_text(encoding="utf-8-sig")
@@ -419,8 +436,8 @@ def test_fingerprint_migration_rebuilds_instead_of_duplicating():
 
         store = Store(path)                       # migration runs here
         assert store.count() == 2, store.count()
-        assert not [r for r in store.conn.execute(
-            "SELECT 1 FROM jobs WHERE fingerprint LIKE 'stale-%'")]
+        assert not list(store.conn.execute(
+            "SELECT 1 FROM jobs WHERE fingerprint LIKE 'stale-%'"))
         # Re-inserting the same jobs must now be a no-op, not a duplication.
         assert store.insert_new([
             Job(company="Bosch Group", title="Data Engineer", url="https://1",
@@ -550,7 +567,7 @@ def test_telegram_posts_one_message_per_job():
         def __init__(self):
             self.n = 0
 
-        def post(self, url, json=None):
+        def post(self, url, json=None):  # noqa: F811 - mirrors httpx's kwarg
             self.n += 1
             attempts.append(json["text"].split("\n")[0])
             if self.n == 2:                      # transient: retry after 0s
@@ -643,9 +660,9 @@ def test_every_source_date_format_parses():
 
     # Workday and Instahyre write a sentence, not a date.
     today = parse_date("Posted Today")
-    assert today and today.startswith(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    assert today and today.startswith(datetime.now(UTC).strftime("%Y-%m-%d"))
     six = parse_date("Posted 6 Days Ago")
-    assert 5 <= (datetime.now(timezone.utc)
+    assert 5 <= (datetime.now(UTC)
                  - datetime.fromisoformat(six)).days <= 6, six
     assert parse_date("Posted 30+ Days Ago") is not None
 
@@ -664,7 +681,7 @@ def test_max_age_filter():
     stale postings."""
     f = Filter({"filters": {"it_only": False, "entry_level_only": False,
                             "max_age_days": 30}})
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     def job(days):
         stamp = (now - timedelta(days=days)).isoformat() if days is not None else None
@@ -714,7 +731,7 @@ def test_queue_expiry_drops_stale_but_keeps_undated():
     the channel would eventually be advertising month-old roles."""
     with tempfile.TemporaryDirectory() as tmp:
         store = Store(Path(tmp) / "e.db")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         store.insert_new([
             Job(company="A", title="Fresh Engineer", url="https://1",
                 location="Pune", posted_at=(now - timedelta(days=2)).isoformat()),
@@ -741,6 +758,7 @@ def test_posting_is_not_gated_on_finding_new_jobs():
     The earlier version returned early on `if not new`, so the channel went
     silent for four hours whenever a run added nothing."""
     import inspect
+
     from src import run as run_mod
     body = inspect.getsource(run_mod.main)
 
@@ -854,7 +872,7 @@ def test_last_post_time_round_trips():
         path = Path(tmp) / "m.db"
         store = Store(path)
         assert store.hours_since_last_post(default=7.0) == 7.0   # never posted
-        earlier = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+        earlier = (datetime.now(UTC) - timedelta(hours=3)).isoformat()
         store.set_meta("last_post_at", earlier)
         store.close()
 
@@ -914,6 +932,113 @@ def test_shipped_configs_are_valid():
         if Path(path).exists():
             assert check_config(path) == [], (path, check_config(path))
     print("  shipped configs validate           ok")
+
+
+def test_company_display_names():
+    """Most ATS adapters only know a company by its URL slug, so the channel
+    was announcing roles at "gitlab", "grafanalabs", "hpe" and "BoschGroup".
+    It is the first thing a reader's eye lands on."""
+    cases = {
+        "gitlab": "GitLab", "grafanalabs": "Grafana Labs",
+        "BoschGroup": "Bosch Group", "hpe": "HPE", "nvidia": "NVIDIA",
+        "newrelic": "New Relic", "scaleai": "Scale AI", "upgrad": "upGrad",
+        "philips": "Philips", "tech-mahindra": "Tech Mahindra",
+    }
+    for raw, expected in cases.items():
+        assert display_company(raw) == expected, (raw, display_company(raw))
+
+    # A real name from a real API field is left exactly as it is — nothing we
+    # derive beats what the source actually said.
+    for name in ("Thermo Fisher Scientific", "EPAM Systems", "QAD, Inc.",
+                 "D. E. Shaw", "Proxify AB"):
+        assert display_company(name) == name, name
+
+    assert display_company("") == ""
+    assert display_company(None) == ""
+    # Applied on construction, so nothing downstream has to remember to call it.
+    assert Job(company="boschgroup", title="T", url="u").company == "Bosch Group"
+    print("  company display names              ok")
+
+
+def test_salary_formatting():
+    """Sources hand over floats, sometimes one end of the range, sometimes NaN.
+    Anything unusable has to become an empty string, not 'nan - None'."""
+    assert _money(150000, 220000, "USD", "year") == "$150K – 220K/yr"
+    assert _money(1200000, 1800000, "INR", "year") == "₹12L – 18L/yr"
+    assert _money(90000, 90000, "EUR", "year") == "€90K/yr"
+    assert _money(50, None, "USD", "hour") == "$50/hr"
+    for junk in ((None, None, "", ""), (0, 0, "USD", "year"),
+                 ("", "", "", ""), (-5, -1, "USD", "year")):
+        assert _money(*junk) == "", junk
+    assert _money(float("nan"), float("nan"), "USD", "year") == ""
+
+    # It reaches the message only when there is something to say.
+    with_pay = _fmt(Job(company="Ramp", title="Engineer", url="https://x",
+                        salary="$211K – $290K"))
+    assert "💰 $211K – $290K" in with_pay
+    assert "💰" not in _fmt(Job(company="Ramp", title="Engineer", url="https://x"))
+    print("  salary parsing and display         ok")
+
+
+def test_same_url_is_one_posting_unless_the_title_differs():
+    """Rippling advertises a single remote role against thirteen US states, all
+    on the same URL. The fingerprint ignores the URL on purpose — so that one
+    role reached via two sources collapses — which left this case wide open.
+
+    But a URL is not always one job: a truncated Oracle Cloud link and a reused
+    Indeed link each cover two different titles in the live data, so company and
+    title have to be part of the key."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = Store(Path(tmp) / "u.db")
+        states = ["Washington", "Idaho", "Nevada", "California", "Oregon",
+                  "Utah", "Wyoming", "Arizona", "Texas", "Colorado"]
+        same = [Job(company="Rippling", title="Account Manager",
+                    url="https://ats.rippling.com/x",
+                    location=f"Remote ({s}, US)") for s in states]
+        assert len(store.insert_new(same)) == 1, "multi-location duplicate stored"
+
+        different = [
+            Job(company="Micron", title="Design Engineer",
+                url="https://m.wd1/job/x", location="Bengaluru"),
+            Job(company="Micron", title="Verification Engineer",
+                url="https://m.wd1/job/x", location="Bengaluru"),
+        ]
+        assert len(store.insert_new(different)) == 2, "distinct titles collapsed"
+        store.close()
+    print("  same url, one posting              ok")
+
+
+def test_blank_company_is_rejected():
+    """Indeed hides the employer on some listings. "Full Stack Engineer at
+    (blank)" is not something a reader can act on."""
+    f = Filter({"filters": {"it_only": True, "entry_level_only": False}})
+    assert f.reason(Job(company="", title="Full Stack Engineer",
+                        url="u", location="Pune")) == "no company name"
+    assert f.reason(Job(company="   ", title="Full Stack Engineer",
+                        url="u", location="Pune")) == "no company name"
+    assert f.reason(Job(company="Acme", title="Full Stack Engineer",
+                        url="u", location="Pune")) is None
+    print("  blank company rejected             ok")
+
+
+def test_run_history_is_recorded():
+    """GitHub's Actions log ages out and cannot be queried, so 'is the feed
+    healthy?' needs a trend rather than a squint at the latest run."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = Store(Path(tmp) / "r.db")
+        assert store.recent_runs() == []
+        store.record_run(started_at="2026-09-09T10:00:00+00:00", mode="fetch",
+                         fetched=4000, kept=900, added=50, posted=15,
+                         queued=600, dead=3, seconds=31.4)
+        store.record_run(started_at="2026-09-09T11:00:00+00:00", mode="post-only",
+                         posted=20, queued=580)
+        rows = store.recent_runs()
+        assert len(rows) == 2
+        assert rows[0]["mode"] == "post-only"        # newest first
+        assert rows[1]["fetched"] == 4000
+        assert rows[1]["seconds"] == 31.4
+        store.close()
+    print("  run history recorded               ok")
 
 
 def test_iter_targets_shape():

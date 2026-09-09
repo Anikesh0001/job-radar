@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta, timezone
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from typing import Optional
 
 # Noise that shows up in titles and destroys naive deduplication.
 _TITLE_NOISE = re.compile(
@@ -100,6 +99,74 @@ def canon_location(text: str) -> str:
     return head or t
 
 
+# Most ATS adapters only know the company by its URL slug, so the channel was
+# announcing roles at "gitlab", "grafanalabs", "hpe" and "BoschGroup". In a
+# public feed that reads as broken rather than terse, and it is the one piece
+# of every message a reader scans first.
+_COMPANY_STYLE = {
+    # Acronyms and initialisms, which title-casing mangles.
+    "hpe": "HPE", "ibm": "IBM", "sap": "SAP", "hcl": "HCL", "tcs": "TCS",
+    "aws": "AWS", "amd": "AMD", "arm": "ARM", "ey": "EY", "kpmg": "KPMG",
+    "pwc": "PwC", "nvidia": "NVIDIA", "sas": "SAS", "bmc": "BMC",
+    "qad": "QAD", "epam": "EPAM", "hcltech": "HCLTech", "ltimindtree": "LTIMindtree",
+    # Names with internal capitals a title() would flatten.
+    "gitlab": "GitLab", "github": "GitHub", "openai": "OpenAI",
+    "mongodb": "MongoDB", "postgresql": "PostgreSQL", "youtube": "YouTube",
+    "linkedin": "LinkedIn", "paypal": "PayPal", "ebay": "eBay",
+    "deepmind": "DeepMind", "servicenow": "ServiceNow", "salesforce": "Salesforce",
+    "browserstack": "BrowserStack", "freshworks": "Freshworks",
+    "razorpay": "Razorpay", "phonepe": "PhonePe", "makemytrip": "MakeMyTrip",
+    "nobroker": "NoBroker", "cardekho": "CarDekho", "bigbasket": "BigBasket",
+    "upgrad": "upGrad", "byjus": "BYJU'S", "boat": "boAt",
+    # Multi-word names that arrive as one lowercase token.
+    "grafanalabs": "Grafana Labs", "cockroachlabs": "Cockroach Labs",
+    "scaleai": "Scale AI", "togetherai": "Together AI", "newrelic": "New Relic",
+    "boschgroup": "Bosch Group", "remotecom": "Remote.com",
+    "digitalocean": "DigitalOcean", "planetscale": "PlanetScale",
+    "launchdarkly": "LaunchDarkly", "cultureamp": "Culture Amp",
+    "customerio": "Customer.io", "helpscout": "Help Scout",
+    "observeai": "Observe.AI", "startree": "StarTree", "flyio": "Fly.io",
+    "lightmatter": "Lightmatter", "influxdata": "InfluxData",
+    "apollographql": "Apollo GraphQL", "clickhouse": "ClickHouse",
+    "thoughtworks": "Thoughtworks", "techmahindra": "Tech Mahindra",
+    "rebelfoods": "Rebel Foods", "lendingkart": "Lendingkart",
+    "surveymonkey": "SurveyMonkey", "workhuman": "Workhuman",
+}
+
+# "BoschGroup" -> "Bosch Group", but not "IBM" -> "I B M".
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+
+def display_company(name: str) -> str:
+    """A company name fit to put in front of readers.
+
+    Leaves alone anything that already looks like a real name — if a source
+    gave us "Thermo Fisher Scientific", that is better than anything we could
+    derive. Only slugs get rewritten.
+    """
+    raw = (name or "").strip()
+    if not raw:
+        return ""
+
+    override = _COMPANY_STYLE.get(raw.lower().replace(" ", "").replace(".", ""))
+    if override:
+        return override
+
+    # A name with a space and any capital came from a real API field.
+    if " " in raw and raw != raw.lower():
+        return raw
+
+    split = _CAMEL.sub(" ", raw)
+    if split != raw:
+        return split
+
+    if raw.islower() or raw.isupper():
+        # Slug punctuation to spaces, then title-case each word.
+        words = re.split(r"[-_.]+", raw)
+        return " ".join(w[:1].upper() + w[1:] for w in words if w)
+    return raw
+
+
 # Every source states "when was this posted" differently. Left as-is these are
 # unsortable and unfilterable, and a third of the database looked undated when
 # it was not: Lever sends epoch milliseconds, Himalayas epoch seconds, RSS
@@ -116,7 +183,7 @@ _RELATIVE = re.compile(
 )
 
 
-def parse_date(value) -> Optional[str]:
+def parse_date(value) -> str | None:
     """Best-effort convert any source's date into ISO 8601 UTC, or None."""
     if value is None:
         return None
@@ -128,7 +195,7 @@ def parse_date(value) -> Optional[str]:
     if text.isdigit() and len(text) in (10, 13):
         stamp = int(text) / (1000 if len(text) == 13 else 1)
         try:
-            return datetime.fromtimestamp(stamp, tz=timezone.utc).isoformat(
+            return datetime.fromtimestamp(stamp, tz=UTC).isoformat(
                 timespec="seconds")
         except (OverflowError, OSError, ValueError):
             return None
@@ -140,16 +207,16 @@ def parse_date(value) -> Optional[str]:
         try:
             dt = datetime.fromisoformat(candidate)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+                dt = dt.replace(tzinfo=UTC)
+            return dt.astimezone(UTC).isoformat(timespec="seconds")
         except ValueError:
             pass
         for fmt in _ISO_FORMATS:
             try:
                 dt = datetime.strptime(candidate, fmt)
                 if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+                    dt = dt.replace(tzinfo=UTC)
+                return dt.astimezone(UTC).isoformat(timespec="seconds")
             except ValueError:
                 continue
 
@@ -158,15 +225,15 @@ def parse_date(value) -> Optional[str]:
         dt = parsedate_to_datetime(text)
         if dt is not None:
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+                dt = dt.replace(tzinfo=UTC)
+            return dt.astimezone(UTC).isoformat(timespec="seconds")
     except (TypeError, ValueError):
         pass
 
     # "Posted 6 Days Ago", "Posted Today", "Posted 30+ Days Ago".
     m = _RELATIVE.search(text)
     if m:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         word, amount, unit = m.group(1), m.group(2), m.group(3)
         if word:
             delta = timedelta(days=0 if word.lower() == "today" else 1)
@@ -188,9 +255,10 @@ class Job:
     source: str = "manual"
     location: str = ""
     description: str = ""
-    posted_at: Optional[str] = None  # ISO 8601
+    posted_at: str | None = None  # ISO 8601
+    salary: str = ""  # free text as the source stated it, e.g. "₹12L – ₹18L"
     first_seen: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
+        default_factory=lambda: datetime.now(UTC).isoformat(timespec="seconds")
     )
 
     @property
@@ -226,6 +294,7 @@ class Job:
 
     def __post_init__(self) -> None:
         self.posted_at = parse_date(self.posted_at)
+        self.company = display_company(self.company)
 
     def to_row(self) -> dict:
         d = asdict(self)

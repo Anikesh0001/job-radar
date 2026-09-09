@@ -12,13 +12,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import random
+import re
 import threading
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
-from typing import Callable, Iterable
+from collections.abc import Callable, Iterable
+from datetime import UTC, datetime
 
 import httpx
 from selectolax.parser import HTMLParser
@@ -120,6 +120,44 @@ def _request(client: httpx.Client, method: str, url: str, **kw) -> httpx.Respons
     raise RuntimeError(f"unreachable retry state for {url}")
 
 
+_CURRENCY = {"USD": "$", "GBP": "£", "EUR": "€", "INR": "₹"}
+
+
+def _money(low, high, currency: str = "", interval: str = "") -> str:
+    """Format a pay range the way a reader wants to skim it.
+
+    Sources hand over floats, sometimes only one end of the range, sometimes
+    NaN. Anything unusable becomes an empty string rather than "nan - None".
+    """
+    def num(v):
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        if f != f or f <= 0:       # NaN, zero, negative
+            return None
+        return f
+
+    lo, hi = num(low), num(high)
+    if lo is None and hi is None:
+        return ""
+
+    symbol = _CURRENCY.get((currency or "").strip().upper(), "")
+
+    def fmt(v):
+        if v >= 100_000:
+            return f"{v / 100_000:.1f}L".replace(".0L", "L") if symbol == "₹" \
+                else f"{v / 1000:.0f}K"
+        if v >= 1000:
+            return f"{v / 1000:.0f}K"
+        return f"{v:.0f}"
+
+    span = f"{fmt(lo)} – {fmt(hi)}" if lo and hi and lo != hi else fmt(lo or hi)
+    per = {"year": "/yr", "yearly": "/yr", "month": "/mo", "monthly": "/mo",
+           "hour": "/hr", "hourly": "/hr"}.get((interval or "").lower(), "")
+    return f"{symbol}{span}{per}".strip()
+
+
 def _get(client: httpx.Client, url: str, **kw):
     return _request(client, "GET", url, **kw)
 
@@ -177,6 +215,14 @@ def ashby(client: httpx.Client, slug: str) -> list[Job]:
     data = _get(client, url, params={"includeCompensation": "true"}).json()
     out = []
     for j in data.get("jobs", []):
+        # Ashby is the one ATS here that reliably publishes pay, and it is the
+        # single most useful thing a job posting can say.
+        comp = j.get("compensation") or {}
+        salary = (
+            comp.get("compensationTierSummary")
+            or comp.get("scrapeableCompensationSalarySummary")
+            or ""
+        )
         out.append(
             Job(
                 company=data.get("name") or slug,
@@ -185,6 +231,7 @@ def ashby(client: httpx.Client, slug: str) -> list[Job]:
                 location=j.get("location", ""),
                 description=_text(j.get("descriptionHtml") or j.get("descriptionPlain", "")),
                 posted_at=j.get("publishedAt"),
+                salary=_text(str(salary), 80),
                 source="ashby",
             )
         )
@@ -391,27 +438,27 @@ def personio(client: httpx.Client, slug: str) -> list[Job]:
     """https://{slug}.jobs.personio.de/xml — Personio's <workzag-jobs> feed."""
     root = _parse_xml(_get(client, f"https://{slug}.jobs.personio.de/xml").text)
     out = []
+    def val(pos, tag: str) -> str:
+        el = pos.find(tag)
+        return (el.text or "").strip() if el is not None and el.text else ""
+
     for pos in root.iter("position"):
 
-        def val(tag: str) -> str:
-            el = pos.find(tag)
-            return (el.text or "").strip() if el is not None and el.text else ""
-
-        offices = [val("office")] + [
+        offices = [val(pos, "office")] + [
             (o.text or "").strip()
             for o in pos.iterfind("additionalOffices/office")
             if o.text
         ]
-        jid = val("id")
+        jid = val(pos, "id")
         desc = " ".join(t or "" for t in pos.itertext() if t)
         out.append(
             Job(
-                company=val("subcompany") or slug,
-                title=val("name"),
+                company=val(pos, "subcompany") or slug,
+                title=val(pos, "name"),
                 url=f"https://{slug}.jobs.personio.de/job/{jid}",
                 location="; ".join(o for o in offices if o),
                 description=_text(desc),
-                posted_at=val("createdAt") or None,
+                posted_at=val(pos, "createdAt") or None,
                 source="personio",
             )
         )
@@ -582,7 +629,7 @@ def remoteok(client: httpx.Client, _: str = "") -> list[Job]:
 def _epoch_to_iso(value) -> str | None:
     """Arbeitnow sends created_at as a Unix timestamp, not a date string."""
     try:
-        return datetime.fromtimestamp(int(value), tz=timezone.utc).isoformat(
+        return datetime.fromtimestamp(int(value), tz=UTC).isoformat(
             timespec="seconds"
         )
     except (TypeError, ValueError):
@@ -827,7 +874,7 @@ def smartrecruiters_search(client: httpx.Client, spec: str = "") -> list[Job]:
                 "https://jobs.smartrecruiters.com/sr-jobs/search",
                 params={"keyword": kw},
             ).json()
-        except Exception as e:  # noqa: BLE001 - one keyword must not kill the rest
+        except Exception as e:
             log.debug("sr-search %r: %s", kw, e)
             continue
         for j in data.get("content", []):
@@ -974,6 +1021,8 @@ def adzuna(client: httpx.Client, spec: str = "in") -> list[Job]:
                     location=(j.get("location") or {}).get("display_name", ""),
                     description=_text(j.get("description", "")),
                     posted_at=j.get("created"),
+                    salary=_money(j.get("salary_min"), j.get("salary_max"),
+                                  "GBP" if country == "gb" else "", "year"),
                     source="adzuna",
                 )
             )
@@ -1033,8 +1082,8 @@ def jobspy(client: httpx.Client, spec: str) -> list[Job]:
 
     try:
         from jobspy import scrape_jobs
-    except ImportError:
-        raise Skipped("python-jobspy not installed (pip install python-jobspy)")
+    except ImportError as e:
+        raise Skipped("python-jobspy not installed (pip install python-jobspy)") from e
 
     def clean(value) -> str:
         # pandas hands back NaN for a missing cell, and str(NaN) is "nan".
@@ -1068,6 +1117,8 @@ def jobspy(client: httpx.Client, spec: str) -> list[Job]:
                 location=loc,
                 description=_text(clean(row.get("description"))),
                 posted_at=clean(row.get("date_posted")) or None,
+                salary=_money(row.get("min_amount"), row.get("max_amount"),
+                              clean(row.get("currency")), clean(row.get("interval"))),
                 source=f"jobspy-{site}",
             )
         )
@@ -1184,7 +1235,7 @@ def _collect_sitemap_urls(client: httpx.Client, url: str, depth: int = 0) -> lis
     """Walk a sitemap, following <sitemapindex> one level down."""
     try:
         root = _parse_xml(_get(client, url).text)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         log.debug("sitemap %s unreadable: %s", url, e)
         return []
 
@@ -1257,7 +1308,7 @@ def sitemap(client: httpx.Client, spec: str) -> list[Job]:
     for u in job_urls[:max_pages]:
         try:
             out.extend(_jobs_from_html(_get(client, u).text, u))
-        except Exception as e:  # noqa: BLE001 - one bad page must not stop the crawl
+        except Exception as e:
             log.debug("sitemap page %s: %s", u, e)
         time.sleep(random.uniform(0.3, 0.8))  # be a good guest on someone's site
     for j in out:
@@ -1319,7 +1370,7 @@ def fetch_one(platform: str, slug: str) -> list[Job]:
         raise
     except httpx.HTTPStatusError as e:
         log.warning("%s/%s -> HTTP %s", platform, slug, e.response.status_code)
-    except Exception as e:  # noqa: BLE001 - one bad source must not kill the run
+    except Exception as e:
         log.warning("%s/%s -> %s: %s", platform, slug, type(e).__name__, e)
     return []
 

@@ -5,12 +5,12 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from rapidfuzz import fuzz
 
-from .models import Job, canon_location, normalise
+from .models import Job, canon_location, normalise, normalise_company
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     description TEXT,
     source      TEXT,
     posted_at   TEXT,
+    salary      TEXT,
     first_seen  TEXT NOT NULL,
     -- Refreshed every time a run sees the posting again, so a listing that
     -- disappears can be aged out later without being re-notified now.
@@ -39,6 +40,21 @@ CREATE INDEX IF NOT EXISTS idx_dedupe ON jobs(company, title);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
+);
+
+-- One row per run. Without it the only history is GitHub's Actions log, which
+-- ages out and cannot be queried: "is the feed healthy?" becomes a question
+-- you answer by squinting at the last run rather than at a trend.
+CREATE TABLE IF NOT EXISTS runs (
+    started_at TEXT PRIMARY KEY,
+    mode       TEXT NOT NULL,
+    fetched    INTEGER NOT NULL DEFAULT 0,
+    kept       INTEGER NOT NULL DEFAULT 0,
+    added      INTEGER NOT NULL DEFAULT 0,
+    posted     INTEGER NOT NULL DEFAULT 0,
+    queued     INTEGER NOT NULL DEFAULT 0,
+    dead       INTEGER NOT NULL DEFAULT 0,
+    seconds    REAL    NOT NULL DEFAULT 0
 );
 
 -- Per-target outcome of every run. Without this a source that quietly starts
@@ -110,7 +126,7 @@ def _looks_indian(location: str) -> bool:
 
 
 def _utcnow() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 class Store:
@@ -128,6 +144,8 @@ class Store:
         if "last_seen" not in have:
             self.conn.execute("ALTER TABLE jobs ADD COLUMN last_seen TEXT")
             self.conn.execute("UPDATE jobs SET last_seen = first_seen")
+        if "salary" not in have:
+            self.conn.execute("ALTER TABLE jobs ADD COLUMN salary TEXT")
 
         if self.conn.execute("PRAGMA user_version").fetchone()[0] < FINGERPRINT_VERSION:
             self._rebuild_fingerprints()
@@ -146,7 +164,7 @@ class Store:
         """
         rows = self.conn.execute(
             """SELECT fingerprint, company, title, url, location, description,
-                      source, posted_at, first_seen, last_seen, notified
+                      source, posted_at, salary, first_seen, last_seen, notified
                FROM jobs ORDER BY first_seen ASC"""
         ).fetchall()
         if not rows:
@@ -167,11 +185,11 @@ class Store:
             self.conn.execute(
                 """INSERT OR IGNORE INTO jobs_rebuild
                    (fingerprint, company, title, url, location, description,
-                    source, posted_at, first_seen, last_seen, notified)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    source, posted_at, salary, first_seen, last_seen, notified)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (fp, r["company"], r["title"], r["url"], r["location"],
-                 r["description"], r["source"], r["posted_at"], r["first_seen"],
-                 r["last_seen"], r["notified"]),
+                 r["description"], r["source"], r["posted_at"], r["salary"],
+                 r["first_seen"], r["last_seen"], r["notified"]),
             )
         kept = self.conn.execute("SELECT COUNT(*) FROM jobs_rebuild").fetchone()[0]
         self.conn.execute("DROP TABLE jobs")
@@ -191,6 +209,24 @@ class Store:
 
     def _all_fingerprints(self) -> set[str]:
         return {r[0] for r in self.conn.execute("SELECT fingerprint FROM jobs")}
+
+    def _all_posting_keys(self) -> set[tuple]:
+        """(company, title, url) for everything stored.
+
+        The fingerprint deliberately ignores the URL so one role reached via
+        two sources collapses to one row. That leaves the opposite case open:
+        Rippling advertises a single remote job against thirteen US states, all
+        on the SAME url, and the fingerprint saw thirteen distinct postings.
+
+        Company and title are part of the key because a URL is not always one
+        job — a truncated Oracle Cloud link and a reused Indeed link both cover
+        two different titles in the live data, and collapsing those would lose
+        a real posting.
+        """
+        return {
+            (normalise_company(c), normalise(t), (u or "").strip())
+            for c, t, u in self.conn.execute("SELECT company, title, url FROM jobs")
+        }
 
     def _keys_by_company(self) -> dict[str, list[str]]:
         """company -> its stored dedupe keys, loaded once per run.
@@ -226,6 +262,7 @@ class Store:
         new: list[Job] = []
         seen_this_run: set[str] = set()
         known = self._all_fingerprints()
+        posting_keys = self._all_posting_keys()
         keys = self._keys_by_company()
         now = _utcnow()
 
@@ -243,14 +280,29 @@ class Store:
                     """UPDATE jobs SET
                            last_seen   = ?,
                            posted_at   = COALESCE(NULLIF(posted_at, ''), ?),
+                           salary      = COALESCE(NULLIF(salary, ''), ?),
                            location    = COALESCE(NULLIF(location, ''), ?),
                            description = COALESCE(NULLIF(description, ''), ?)
                        WHERE fingerprint = ?""",
-                    (now, job.posted_at, job.location,
+                    (now, job.posted_at, job.salary, job.location,
                      (job.description or "")[:DESCRIPTION_KEEP], fp),
                 )
                 seen_this_run.add(fp)
                 continue
+
+            # Same company, same title, same URL: one posting, however many
+            # locations the source listed it under.
+            posting_key = (
+                normalise_company(job.company),
+                normalise(job.title),
+                (job.url or "").strip(),
+            )
+            if posting_key in posting_keys:
+                self.conn.execute(
+                    "UPDATE jobs SET last_seen = ? WHERE url = ?", (now, job.url)
+                )
+                continue
+            posting_keys.add(posting_key)
 
             key = job.dedupe_key
             company_keys = keys.get(job.company, ())
@@ -267,10 +319,10 @@ class Store:
             self.conn.execute(
                 """INSERT OR IGNORE INTO jobs
                    (fingerprint, company, title, url, location, description,
-                    source, posted_at, first_seen, last_seen)
+                    source, posted_at, salary, first_seen, last_seen)
                    VALUES (:fingerprint, :company, :title, :url, :location,
-                           :description, :source, :posted_at, :first_seen,
-                           :last_seen)""",
+                           :description, :source, :posted_at, :salary,
+                           :first_seen, :last_seen)""",
                 row,
             )
             seen_this_run.add(fp)
@@ -376,7 +428,7 @@ class Store:
                 company=r["company"], title=r["title"], url=r["url"],
                 source=r["source"] or "", location=r["location"] or "",
                 description=r["description"] or "", posted_at=r["posted_at"],
-                first_seen=r["first_seen"],
+                salary=r["salary"] or "", first_seen=r["first_seen"],
             )
             for r in picked
         ]
@@ -433,8 +485,8 @@ class Store:
         except ValueError:
             return default
         if last.tzinfo is None:
-            last = last.replace(tzinfo=timezone.utc)
-        hours = (datetime.now(timezone.utc) - last).total_seconds() / 3600
+            last = last.replace(tzinfo=UTC)
+        hours = (datetime.now(UTC) - last).total_seconds() / 3600
         return max(hours, 0.0)
 
     def expire_queue(self, days: int = QUEUE_MAX_AGE_DAYS) -> int:
@@ -446,7 +498,7 @@ class Store:
         whether they are stale.
         """
         cutoff = (
-            datetime.now(timezone.utc) - timedelta(days=days)
+            datetime.now(UTC) - timedelta(days=days)
         ).isoformat(timespec="seconds")
         cur = self.conn.execute(
             """UPDATE jobs SET notified = 1
@@ -482,11 +534,29 @@ class Store:
                 source=r["source"] or "",
                 location=r["location"] or "",
                 description=r["description"] or "",
-                posted_at=r["posted_at"],
+                posted_at=r["posted_at"], salary=r["salary"] or "",
                 first_seen=r["first_seen"],
             )
             for r in rows
         ]
+
+    def record_run(self, **row) -> None:
+        cols = ("started_at", "mode", "fetched", "kept", "added", "posted",
+                "queued", "dead", "seconds")
+        values = {c: row.get(c, 0) for c in cols}
+        values["started_at"] = row.get("started_at") or _utcnow()
+        values["mode"] = row.get("mode") or "fetch"
+        self.conn.execute(
+            f"INSERT OR REPLACE INTO runs ({','.join(cols)}) "
+            f"VALUES ({','.join(':' + c for c in cols)})",
+            values,
+        )
+        self.conn.commit()
+
+    def recent_runs(self, limit: int = 20) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM runs ORDER BY started_at DESC LIMIT ?", (limit,)
+        ).fetchall()
 
     def prune(self, days: int = PRUNE_AFTER_DAYS) -> int:
         """Delete postings not seen for `days`, then reclaim the space.
@@ -496,7 +566,7 @@ class Store:
         rediscover it as brand new and re-announce it.
         """
         cutoff = (
-            datetime.now(timezone.utc) - timedelta(days=days)
+            datetime.now(UTC) - timedelta(days=days)
         ).isoformat(timespec="seconds")
         cur = self.conn.execute(
             "DELETE FROM jobs WHERE COALESCE(last_seen, first_seen) < ?", (cutoff,)
