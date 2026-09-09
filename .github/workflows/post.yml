@@ -19,9 +19,9 @@ on:
   workflow_dispatch:
     inputs:
       count:
-        description: "How many postings to send"
+        description: "Exact number to send (leave blank for the usual rate)"
         type: string
-        default: "20"
+        default: ""
 
 # Shared with fetch.yml: both mutate the same database, and two runs writing
 # the state release at once would lose whichever finished first.
@@ -71,11 +71,20 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          python -m src.run \
-            --config config/fast.yaml \
-            --export '' \
-            --queue-max-age 3 \
-            --notify-limit "${{ github.event.inputs.count || 20 }}"
+          # --notify-limit is passed ONLY for a manual run with an explicit
+          # count. On a schedule it must be absent, or it pins the batch to a
+          # flat number and defeats the catch-up: GitHub skips about half of
+          # these slots, so a fixed 20 per run means the channel's output tracks
+          # GitHub's mood instead of the rate we asked for.
+          LIMIT="${{ github.event.inputs.count }}"
+          if [ -n "$LIMIT" ]; then
+            echo "manual run: sending exactly $LIMIT"
+            python -m src.run --config config/fast.yaml --export '' \
+              --queue-max-age 3 --notify-limit "$LIMIT"
+          else
+            python -m src.run --config config/fast.yaml --export '' \
+              --queue-max-age 3 --notify-rate 15
+          fi
 
       - name: Save state
         if: always()
