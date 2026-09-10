@@ -120,6 +120,14 @@ NOT_IT = re.compile(
     r"teacher|tutor|professor|lecturer|faculty|trainer|training ?(?:manager|lead)|"
     r"accountant|accounting|bookkeep|payroll|audit|tax\b|"
     r"welder|machinist|electrician|plumber|carpenter|fitter|"
+    # Civil and heavy infrastructure. "Principal Tunnel Ventilation Systems
+    # Engineer" reached the channel on the strength of the word "engineer".
+    r"tunnel|ventilation|\bhvac\b|plumbing|surveying|highway|bridge ?design|"
+    r"geotechnic|architectural (?!software)|interior design|"
+    # Semiconductor packaging and silicon layout: "IC Package Development
+    # Engineer" is a hardware role, whatever "development" suggests.
+    r"\bic\b ?(?:package|design|layout|validation)|package development|"
+    r"wafer|lithograph|foundry|\bpcb\b|\bvlsi\b|\brtl\b ?design|"
     r"marketing|content ?writer|copywriter|social ?media|"
     r"legal|paralegal|attorney|counsel\b"
     r")",
