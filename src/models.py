@@ -258,6 +258,11 @@ class Job:
     posted_at: str | None = None  # ISO 8601
     salary: str = ""  # free text as the source stated it, e.g. "₹12L – ₹18L"
     match_score: int | None = None  # 0-100 against profile.yaml, None if unscored
+    # Skills detected in the FULL description at fetch time. Stored because the
+    # description itself is truncated to 200 chars, so anything recomputed
+    # later would be working from a fragment — a rescore was silently dropping
+    # Greenhouse's average score from the seventies to 41.
+    skills: str = ""
     first_seen: str = field(
         default_factory=lambda: datetime.now(UTC).isoformat(timespec="seconds")
     )

@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     posted_at   TEXT,
     salary      TEXT,
     match_score INTEGER,
+    skills      TEXT,
     first_seen  TEXT NOT NULL,
     -- Refreshed every time a run sees the posting again, so a listing that
     -- disappears can be aged out later without being re-notified now.
@@ -149,6 +150,8 @@ class Store:
             self.conn.execute("ALTER TABLE jobs ADD COLUMN salary TEXT")
         if "match_score" not in have:
             self.conn.execute("ALTER TABLE jobs ADD COLUMN match_score INTEGER")
+        if "skills" not in have:
+            self.conn.execute("ALTER TABLE jobs ADD COLUMN skills TEXT")
 
         if self.conn.execute("PRAGMA user_version").fetchone()[0] < FINGERPRINT_VERSION:
             self._rebuild_fingerprints()
@@ -167,8 +170,8 @@ class Store:
         """
         rows = self.conn.execute(
             """SELECT fingerprint, company, title, url, location, description,
-                      source, posted_at, salary, match_score, first_seen,
-                      last_seen, notified
+                      source, posted_at, salary, match_score, skills,
+                      first_seen, last_seen, notified
                FROM jobs ORDER BY first_seen ASC"""
         ).fetchall()
         if not rows:
@@ -189,12 +192,13 @@ class Store:
             self.conn.execute(
                 """INSERT OR IGNORE INTO jobs_rebuild
                    (fingerprint, company, title, url, location, description,
-                    source, posted_at, salary, match_score, first_seen,
-                    last_seen, notified)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    source, posted_at, salary, match_score, skills,
+                    first_seen, last_seen, notified)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (fp, r["company"], r["title"], r["url"], r["location"],
                  r["description"], r["source"], r["posted_at"], r["salary"],
-                 r["match_score"], r["first_seen"], r["last_seen"], r["notified"]),
+                 r["match_score"], r["skills"], r["first_seen"], r["last_seen"],
+                 r["notified"]),
             )
         kept = self.conn.execute("SELECT COUNT(*) FROM jobs_rebuild").fetchone()[0]
         self.conn.execute("DROP TABLE jobs")
@@ -322,14 +326,15 @@ class Store:
             row["last_seen"] = now
             row["description"] = (row.get("description") or "")[:DESCRIPTION_KEEP]
             row.setdefault("match_score", None)
+            row.setdefault("skills", "")
             self.conn.execute(
                 """INSERT OR IGNORE INTO jobs
                    (fingerprint, company, title, url, location, description,
-                    source, posted_at, salary, match_score, first_seen,
-                    last_seen)
+                    source, posted_at, salary, match_score, skills,
+                    first_seen, last_seen)
                    VALUES (:fingerprint, :company, :title, :url, :location,
                            :description, :source, :posted_at, :salary,
-                           :match_score, :first_seen, :last_seen)""",
+                           :match_score, :skills, :first_seen, :last_seen)""",
                 row,
             )
             seen_this_run.add(fp)
@@ -442,7 +447,7 @@ class Store:
                 source=r["source"] or "", location=r["location"] or "",
                 description=r["description"] or "", posted_at=r["posted_at"],
                 salary=r["salary"] or "", match_score=r["match_score"],
-                first_seen=r["first_seen"],
+                skills=r["skills"] or "", first_seen=r["first_seen"],
             )
             for r in picked
         ]
@@ -549,7 +554,8 @@ class Store:
                 location=r["location"] or "",
                 description=r["description"] or "",
                 posted_at=r["posted_at"], salary=r["salary"] or "",
-                match_score=r["match_score"], first_seen=r["first_seen"],
+                match_score=r["match_score"], skills=r["skills"] or "",
+                first_seen=r["first_seen"],
             )
             for r in rows
         ]

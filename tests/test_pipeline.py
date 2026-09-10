@@ -38,8 +38,8 @@ from src.validate import check_config
 # drives a browser. These tests therefore have to skip rather than fail when
 # it is absent, or CI goes red on a checkout that is working as intended.
 try:
-    import src.match  # noqa: F401
-    import src.resume  # noqa: F401
+    import src.match
+    import src.resume
     HAVE_APPLY_LAYER = True
 except ImportError:
     HAVE_APPLY_LAYER = False

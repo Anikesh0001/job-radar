@@ -367,8 +367,12 @@ def main(argv=None) -> int:
             # later without refetching.
             profile = _load_profile_quietly(args.profile)
             if profile:
+                from .match import job_skills
                 from .match import score as match_score
                 for job in relevant:
+                    # Capture the skills BEFORE the description is truncated
+                    # on the way into storage.
+                    job.skills = ",".join(sorted(job_skills(job)))
                     job.match_score = match_score(job, profile).score
             log.info("%d postings passed filters", len(relevant))
             summarise(raw, relevant, health)
