@@ -117,7 +117,7 @@ NOT_IT = re.compile(
     r"driver|warehouse|forklift|logistics|supply ?chain|"
     r"cashier|retail|store ?(?:manager|associate)|barista|waiter|chef|cook\b|"
     r"housekeep|janitor|"
-    r"teacher|tutor|professor|lecturer|faculty|"
+    r"teacher|tutor|professor|lecturer|faculty|trainer|training ?(?:manager|lead)|"
     r"accountant|accounting|bookkeep|payroll|audit|tax\b|"
     r"welder|machinist|electrician|plumber|carpenter|fitter|"
     r"marketing|content ?writer|copywriter|social ?media|"

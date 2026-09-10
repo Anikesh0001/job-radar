@@ -16,3 +16,15 @@ latest.md
 
 # LibreOffice lock file, created when you have the sheet open
 .~lock.*#
+
+# Your resume and everything derived from it. This repo is PUBLIC: a CV
+# carries your phone number, email and address, and once pushed it lives in
+# the git history and in every clone, whether or not you delete it later.
+# Leading slash matters: an unanchored `resume.*` also swallowed src/resume.py,
+# the parser itself, and it vanished from git without a word.
+/resume.*
+/cv.*
+/profile.yaml
+/applications.db
+/applications.csv
+/cover-letters/

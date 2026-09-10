@@ -1070,6 +1070,68 @@ def test_minimum_interval_floor():
     print("  minimum interval floor             ok")
 
 
+def test_resume_skill_matching_is_token_exact():
+    """Substring matching looked fine and was quietly wrong: "html " ends in
+    "ml ", so every CV mentioning HTML claimed machine learning, and "ts "
+    matched "projects" and awarded TypeScript to someone who had never used
+    it. A profile that overstates your skills is worse than one that misses."""
+    from src.resume import find_skills
+
+    have, _ = find_skills("Python, Flask, Vue.js, HTML5, CSS3, MongoDB, Celery")
+    for expected in ("python", "flask", "vue", "html", "css", "mongodb", "celery"):
+        assert expected in have, expected
+
+    # Prefix aliases are opt-in, so these must NOT be inferred.
+    for text, wrong in (("I know HTML5", "machine learning"),
+                        ("Worked on projects", "typescript"),
+                        ("going to the office", "go"),
+                        ("a great candidate", "c")):
+        found, _ = find_skills(text)
+        assert wrong not in found, (text, wrong)
+    print("  resume skills token-exact         ok")
+
+
+def test_match_score_prefers_specific_postings():
+    """Coverage alone rewarded vagueness: a posting naming one technology you
+    happen to know scored 1/1 and outranked a detailed one you matched six
+    ways. That put the thinnest ads at the top of the apply list."""
+    from src.match import score
+    from src.resume import Profile
+
+    me = Profile(skills=["python", "flask", "sql", "redis", "rest", "celery",
+                         "javascript", "vue"], years_experience=1.0)
+
+    vague = score(Job(company="A", title="Junior JavaScript Developer",
+                      url="u", description="JavaScript."), me)
+    detailed = score(Job(company="B", title="Backend Engineer I", url="u",
+                         description="Python, Flask, REST APIs, Redis, SQL, "
+                                     "Celery. 1+ years."), me)
+    assert detailed.score > vague.score, (detailed.score, vague.score)
+    assert detailed.score >= 75 and detailed.label == "strong"
+
+    # Way out of range on seniority should sink regardless of keywords.
+    senior = score(Job(company="C", title="Principal Distributed Systems Engineer",
+                       url="u", description="10+ years. Go, Kubernetes, Kafka."), me)
+    assert senior.score < 35, senior.score
+    assert any("senior" in r for r in senior.reasons)
+
+    # The reasons have to be readable — the score is an argument, not a verdict.
+    assert detailed.overlap and all(isinstance(r, str) for r in detailed.reasons)
+    print("  match scoring ranks sensibly      ok")
+
+
+def test_experience_estimate_excludes_education():
+    """A four-year degree is not four years of work. Counting it pushed every
+    posting's experience requirement out of reach."""
+    from src.resume import estimate_years
+
+    cv = ("EXPERIENCE\nFull Stack Developer - Present\nDataWeave\n"
+          "EDUCATION\nBachelor of Engineering 2023 - 2027\n")
+    assert estimate_years(cv) < 2, estimate_years(cv)
+    assert estimate_years("no dates here at all") == 0.0
+    print("  experience excludes education     ok")
+
+
 def test_iter_targets_shape():
     """Two bugs this pins down: an empty list for a slug-taking platform used
     to yield ('workable', ''), firing a doomed request every run; and YAML

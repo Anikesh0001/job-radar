@@ -40,6 +40,9 @@ src/notify.py           Telegram / Discord / latest.md
         │
         ▼
 src/export.py           jobs.xlsx / .csv / .txt, with apply links
+        │
+        ▼
+apply.py                rank against your CV, draft, autofill, track
 ```
 
 The whole thing runs inside a GitHub Actions cron job every three hours and
@@ -121,6 +124,25 @@ Two things in there are easy to get wrong and both kill the feed silently:
   a SQLite file changes throughout on every write, so nothing deltas: 5.6GB of
   history a year. The workflow keeps the database and spreadsheet as assets on
   a `data` release instead, which git history never sees.
+
+## Applying
+
+The radar finds jobs; [`apply.py`](apply.py) helps you act on them. It reads
+your CV, ranks everything found against your actual skills, drafts a letter,
+fills the form and tracks what you sent.
+
+```bash
+python apply.py profile     # parse your CV into profile.yaml
+python apply.py list        # ranked matches you have not applied to
+python apply.py show 3      # the posting, its questions, a draft letter
+python apply.py fill 3      # browser autofill — you press submit
+```
+
+Runs on your machine only, never in CI. **Full walkthrough:
+[APPLYING.md](APPLYING.md)**, including the thing worth knowing up front:
+there is no candidate-side apply API on any of these boards — Greenhouse
+answers `401` — so real submission means driving a browser, and this one never
+clicks submit for you.
 
 ## Sources
 

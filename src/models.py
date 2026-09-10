@@ -257,6 +257,7 @@ class Job:
     description: str = ""
     posted_at: str | None = None  # ISO 8601
     salary: str = ""  # free text as the source stated it, e.g. "₹12L – ₹18L"
+    match_score: int | None = None  # 0-100 against profile.yaml, None if unscored
     first_seen: str = field(
         default_factory=lambda: datetime.now(UTC).isoformat(timespec="seconds")
     )

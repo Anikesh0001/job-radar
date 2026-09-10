@@ -69,6 +69,9 @@ def _fmt(job: Job) -> str:
     lines = [f"<b>{title}</b>", f"🏢 {company}"]
     if job.location:
         lines.append(f"📍 {html.escape(job.location[:100])}")
+    if job.match_score is not None:
+        filled = "●" * round(job.match_score / 20)
+        lines.append(f"🎯 {job.match_score}% match {filled}")
     if job.salary:
         lines.append(f"💰 {html.escape(job.salary[:60])}")
     if job.posted_at:

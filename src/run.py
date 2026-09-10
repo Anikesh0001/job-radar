@@ -41,6 +41,19 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
+def _load_profile_quietly(path: str):
+    """The profile is optional: without one the feed simply has no scores."""
+    if not Path(path).exists():
+        return None
+    try:
+        from .resume import load_profile
+        return load_profile(path)
+    except Exception as e:
+        log.warning("could not read %s (%s) — running without match scores",
+                    path, e)
+        return None
+
+
 def load_config(path: str) -> dict:
     with open(path, encoding="utf-8") as fh:
         return yaml.safe_load(fh) or {}
@@ -132,6 +145,11 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="job-radar")
     ap.add_argument("--config", default="config/sources.yaml")
     ap.add_argument("--db", default="jobs.db")
+    ap.add_argument(
+        "--profile", default="profile.yaml", metavar="PATH",
+        help="resume profile used to score postings; optional, and the feed "
+             "runs unscored without it (build one with: python apply.py profile)",
+    )
     ap.add_argument("--dry-run", action="store_true", help="fetch and filter, send nothing")
     ap.add_argument("--no-filter", action="store_true", help="keep every posting")
     ap.add_argument("--workers", type=int, default=6)
@@ -199,6 +217,11 @@ def main(argv=None) -> int:
              "drips out at --notify-limit per run alongside new finds",
     )
     ap.add_argument(
+        "--rescore", action="store_true",
+        help="re-apply the filters and re-score every stored posting, then "
+             "exit; run this after editing filters, the skill list or your CV",
+    )
+    ap.add_argument(
         "--stats", action="store_true",
         help="show recent run history and exit",
     )
@@ -216,6 +239,41 @@ def main(argv=None) -> int:
         help="how many consecutive empty runs counts as broken (--health)",
     )
     args = ap.parse_args(argv)
+
+    if args.rescore:
+        from .match import score as match_score
+        config = load_config(args.config)
+        f = Filter(config)
+        profile = _load_profile_quietly(args.profile)
+        with Store(args.db) as store:
+            rows = store.conn.execute("SELECT * FROM jobs").fetchall()
+            dropped = rescored = 0
+            for r in rows:
+                job = Job(
+                    company=r["company"], title=r["title"], url=r["url"],
+                    location=r["location"] or "", source=r["source"] or "",
+                    description=r["description"] or "", posted_at=r["posted_at"],
+                )
+                reason = f.reason(job)
+                if reason:
+                    store.conn.execute("DELETE FROM jobs WHERE fingerprint = ?",
+                                       (r["fingerprint"],))
+                    dropped += 1
+                    continue
+                if profile:
+                    # Note the stored description is truncated, so a rescore is
+                    # a little blunter than the score taken at fetch time with
+                    # the full text in hand.
+                    new = match_score(job, profile).score
+                    if new != r["match_score"]:
+                        store.conn.execute(
+                            "UPDATE jobs SET match_score = ? WHERE fingerprint = ?",
+                            (new, r["fingerprint"]))
+                        rescored += 1
+            store.conn.commit()
+            print(f"dropped {dropped} posting(s) the filters now reject")
+            print(f"rescored {rescored} of {len(rows) - dropped} remaining")
+        return 0
 
     if args.stats:
         with Store(args.db) as store:
@@ -303,6 +361,15 @@ def main(argv=None) -> int:
                 relevant = raw
             else:
                 relevant = Filter(config).apply(raw)
+
+            # Score against the resume while the full description is still in
+            # hand — the stored copy is truncated, so this cannot be done
+            # later without refetching.
+            profile = _load_profile_quietly(args.profile)
+            if profile:
+                from .match import score as match_score
+                for job in relevant:
+                    job.match_score = match_score(job, profile).score
             log.info("%d postings passed filters", len(relevant))
             summarise(raw, relevant, health)
             stats.update(fetched=len(raw), kept=len(relevant),
