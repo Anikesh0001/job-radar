@@ -28,3 +28,14 @@ latest.md
 /applications.db
 /applications.csv
 /cover-letters/
+
+# The apply layer stays on your machine. It reads your CV, holds your answers
+# and drives a browser as you — none of which belongs in a public repo, and
+# none of which CI could run anyway.
+/apply.py
+/APPLYING.md
+/src/resume.py
+/src/match.py
+/src/letters.py
+/src/apply_forms.py
+/src/autofill.py

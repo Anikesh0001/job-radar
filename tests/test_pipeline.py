@@ -33,6 +33,17 @@ from src.notify import _fmt, catchup_quota
 from src.sources import _money
 from src.validate import check_config
 
+# The apply layer (resume parsing, matching, cover letters, autofill) is
+# deliberately not published — it reads a CV, holds personal answers and
+# drives a browser. These tests therefore have to skip rather than fail when
+# it is absent, or CI goes red on a checkout that is working as intended.
+try:
+    import src.match  # noqa: F401
+    import src.resume  # noqa: F401
+    HAVE_APPLY_LAYER = True
+except ImportError:
+    HAVE_APPLY_LAYER = False
+
 GREENHOUSE = {
     "jobs": [
         {
@@ -1071,6 +1082,9 @@ def test_minimum_interval_floor():
 
 
 def test_resume_skill_matching_is_token_exact():
+    if not HAVE_APPLY_LAYER:
+        print("  resume skills token-exact         skipped (apply layer not installed)")
+        return
     """Substring matching looked fine and was quietly wrong: "html " ends in
     "ml ", so every CV mentioning HTML claimed machine learning, and "ts "
     matched "projects" and awarded TypeScript to someone who had never used
@@ -1092,6 +1106,9 @@ def test_resume_skill_matching_is_token_exact():
 
 
 def test_match_score_prefers_specific_postings():
+    if not HAVE_APPLY_LAYER:
+        print("  match scoring ranks sensibly      skipped (apply layer not installed)")
+        return
     """Coverage alone rewarded vagueness: a posting naming one technology you
     happen to know scored 1/1 and outranked a detailed one you matched six
     ways. That put the thinnest ads at the top of the apply list."""
@@ -1121,6 +1138,9 @@ def test_match_score_prefers_specific_postings():
 
 
 def test_experience_estimate_excludes_education():
+    if not HAVE_APPLY_LAYER:
+        print("  experience excludes education     skipped (apply layer not installed)")
+        return
     """A four-year degree is not four years of work. Counting it pushed every
     posting's experience requirement out of reach."""
     from src.resume import estimate_years
