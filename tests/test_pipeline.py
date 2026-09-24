@@ -1152,6 +1152,82 @@ def test_experience_estimate_excludes_education():
     print("  experience excludes education     ok")
 
 
+def test_llm_answers_are_validated_before_use():
+    """The LLM pass is a suggestion, not an instruction.
+
+    A model that paraphrases a dropdown option produces a field that looks
+    filled and fails on submit — the exact failure this whole module exists to
+    avoid — so every returned answer is re-checked against the options that
+    were actually offered.
+    """
+    if not HAVE_APPLY_LAYER:
+        print("  llm answers validated             skipped (apply layer not installed)")
+        return
+    from src.llm_fill import _validate
+
+    asked = [
+        {"label": "Veteran Status",
+         "options": ["I am not a protected veteran", "I don't wish to answer"]},
+        {"label": "Why this company?", "options": None},
+        {"label": "Notice period", "options": None},
+    ]
+    got = _validate([
+        # paraphrased — close, but not an option that exists
+        {"question": "Veteran Status", "value": "I am not a veteran", "source": "x"},
+        {"question": "Why this company?", "value": "I build full-stack apps.",
+         "source": "profile"},
+        # a declined question must not appear at all
+        {"question": "Notice period", "value": None, "source": "none"},
+    ], asked)
+
+    assert "Veteran Status" not in got, "a paraphrased option was accepted"
+    assert got["Why this company?"] == "I build full-stack apps."
+    assert "Notice period" not in got, "a null answer was treated as an answer"
+
+    # An exact option is accepted.
+    exact = _validate([{"question": "Veteran Status",
+                        "value": "I don't wish to answer", "source": "x"}], asked)
+    assert exact["Veteran Status"] == "I don't wish to answer"
+    print("  llm answers validated              ok")
+
+
+def test_generic_words_do_not_capture_unrelated_questions():
+    """Every one of these reached a live form and was answered wrongly.
+
+    They are the reason the pattern bank alone is not enough, and the reason
+    anything it does answer is worth pinning down.
+    """
+    if not HAVE_APPLY_LAYER:
+        print("  generic word traps                 skipped (apply layer not installed)")
+        return
+    from src.answers import key_for
+
+    traps = {
+        # "major life activities" is not a degree subject
+        "Do you have a disability that limits your major life activities?":
+            "disability_status",
+        # "Member State" is not your state
+        "Are you an EU citizen (a citizen of European Union Member State)?":
+            "eu_citizen",
+        # a US state question must not be answered with an Indian one
+        "Which U.S. State or Canadian Province do you reside in?": "us_state",
+        # this asks about contracts, not the employer's name
+        "Are you subject to any employment agreements with your current employer?":
+            "non_compete",
+        # "GitLab" here is the company, not a profile link
+        "Have you previously worked at or consulted for GitLab?":
+            "previously_employed_here",
+    }
+    for question, expected in traps.items():
+        assert key_for(question) == expected, (question, key_for(question))
+
+    # ...while the plain forms still resolve.
+    assert key_for("State") == "state"
+    assert key_for("What was your major?") == "field_of_study"
+    assert key_for("Name of your current employer") == "current_employer"
+    print("  generic word traps                 ok")
+
+
 def test_iter_targets_shape():
     """Two bugs this pins down: an empty list for a slug-taking platform used
     to yield ('workable', ''), firing a doomed request every run; and YAML
