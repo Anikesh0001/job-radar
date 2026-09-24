@@ -28,6 +28,7 @@ latest.md
 /applications.db
 /applications.csv
 /cover-letters/
+/apply-evidence/
 
 # The apply layer stays on your machine. It reads your CV, holds your answers
 # and drives a browser as you — none of which belongs in a public repo, and
