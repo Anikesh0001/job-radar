@@ -124,6 +124,7 @@ NOT_IT = re.compile(
     # Engineer" reached the channel on the strength of the word "engineer".
     r"tunnel|ventilation|\bhvac\b|plumbing|surveying|highway|bridge ?design|"
     r"geotechnic|architectural (?!software)|interior design|"
+    r"surveyor|quantity survey|"
     # Semiconductor packaging and silicon layout: "IC Package Development
     # Engineer" is a hardware role, whatever "development" suggests.
     r"\bic\b ?(?:package|design|layout|validation)|package development|"
@@ -148,6 +149,10 @@ NOT_IT_SOFT = re.compile(
     r"hvac|thermal|hydraulic|solder|piping|metallurg|acoustic|"
     r"powertrain|eaxle|emachine|"
     r"instrumentation|controls ?engineer|commissioning|calibration|"
+    # Seen in the live channel: "Assistant Engineer - Bridges" and "Senior
+    # Engineer, CAD Layout". Soft rather than hard, because "bridge" and
+    # "CAD" both appear in genuine software titles.
+    r"\bbridges?\b|\bdams?\b|\bcad\b|structural|\broad\b ?(?:design|works)|"
     r"cost ?engineer|packaging|validation ?engineer"
     r")",
     re.I,
