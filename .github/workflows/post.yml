@@ -49,7 +49,15 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          # python-jobspy reaches Indeed, which is the largest single source of
+          # India IT roles. It was left out on the assumption that a scraper
+          # would be blocked from GitHub's IPs — an assumption never tested,
+          # while 21 Indeed searches quietly returned nothing for 94 runs.
+          # If it turns out to be blocked, the adapter logs a warning and the
+          # run carries on, so trying costs nothing.
+          pip install python-jobspy==1.1.82
 
       # No state yet means fetch.yml has never run. Carry on anyway: this
       # config can seed a database perfectly well on its own, and refusing to
