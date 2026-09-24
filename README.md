@@ -256,11 +256,13 @@ Config format is `site|search term|location|count`:
 
 Delete the `jobspy:` block to turn it off entirely.
 
-The scheduled workflow deliberately does **not** install it. Scrapers run from
-GitHub Actions IPs get blocked far faster than from a home connection — the
-same reason Glassdoor and ZipRecruiter already answer 403 here — and LinkedIn
-at 56 seconds per 100 results would dominate the run. Run `jobspy` locally
-when you want the extra coverage; let the cron job stick to the public APIs.
+The scheduled workflows **do** install it, for `indeed` only. I originally
+left it out assuming a scraper would be blocked from GitHub's IP ranges; that
+assumption was never tested and turned out to be wrong, and it cost 21 Indeed
+searches returning nothing for 94 consecutive runs. Measured from a runner:
+every search returns, and a run's useful yield goes from 762 kept postings to
+1,696. LinkedIn stays out of the scheduled config — it is slow, and it is the
+one back-end whose terms explicitly prohibit this.
 
 #### A note on `pip install` failing
 

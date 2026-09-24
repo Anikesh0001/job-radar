@@ -45,7 +45,13 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          # Indeed, via python-jobspy. Measured from a GitHub runner: all 21
+          # searches return, and the run's useful yield goes from 762 kept
+          # postings to 1,696. The worry that a scraper would be blocked from
+          # CI addresses turned out to be unfounded.
+          pip install python-jobspy==1.1.82
 
       - name: Restore database from the state release
         env:
